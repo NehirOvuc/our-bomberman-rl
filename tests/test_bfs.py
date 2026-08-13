@@ -10,69 +10,14 @@ Run from the repository root:  python -m pytest tests
 import sys
 from pathlib import Path
 
-import numpy as np
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from helpers import CRATE, make_state  # noqa: E402
 
 from agent_code.taco_kebab_agent.bfs import (  # noqa: E402
     ACTIONS, BOMB_POWER, BOMB_TIMER, EXPLOSION_TIMER, NEVER, bfs_direction,
     blast_coords, danger_map, find_escape, first_lethal, free_tiles, safe_from,
     tiles_adjacent_to)
-
-WALL, FREE, CRATE = -1, 0, 1
-
-
-def make_state(picture, bomb_timers=None):
-    """Build a game_state from an ASCII picture, so a test reads like its board.
-
-        #  wall     .  free      c  crate    o  coin
-        a  us       e  opponent  B  bomb     x  burning tile
-
-    Rows are written top to bottom, so picture[row][col] is field[col, row].
-    """
-    rows = picture.strip('\n').split('\n')
-    height, width = len(rows), len(rows[0])
-    assert all(len(r) == width for r in rows), 'picture rows must be equal length'
-
-    field = np.zeros((width, height), dtype=int)
-    explosion_map = np.zeros((width, height), dtype=float)
-    coins, bombs, others = [], [], []
-    self_pos = None
-
-    for y, row in enumerate(rows):
-        for x, ch in enumerate(row):
-            if ch == '#':
-                field[x, y] = WALL
-            elif ch == 'c':
-                field[x, y] = CRATE
-            elif ch == 'o':
-                coins.append((x, y))
-            elif ch == 'a':
-                self_pos = (x, y)
-            elif ch == 'e':
-                others.append((x, y))
-            elif ch == 'B':
-                bombs.append((x, y))
-            elif ch == 'x':
-                explosion_map[x, y] = 1.0
-            elif ch != '.':
-                raise ValueError(f'unknown character {ch!r}')
-
-    timers = bomb_timers if bomb_timers is not None else [3] * len(bombs)
-    assert len(timers) == len(bombs), 'one timer per bomb'
-    assert self_pos is not None, "picture must contain 'a'"
-
-    return {
-        'round': 1,
-        'step': 1,
-        'field': field,
-        'self': ('taco_kebab_agent', 0, True, self_pos),
-        'others': [(f'opp{i}', 0, True, p) for i, p in enumerate(others)],
-        'bombs': list(zip(bombs, timers)),
-        'coins': coins,
-        'explosion_map': explosion_map,
-        'user_input': None,
-    }
 
 
 def first_in_action_order(*names):
