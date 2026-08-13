@@ -1,0 +1,6 @@
+pygame
+tqdm
+numpy
+scipy
+scikit-learn
+joblib
