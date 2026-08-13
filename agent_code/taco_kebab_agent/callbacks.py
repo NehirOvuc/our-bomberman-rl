@@ -5,7 +5,7 @@ import random
 import numpy as np
 
 
-ACTIONS = ['UP', 'RIGHT', 'DOWN', 'LEFT', 'WAIT', 'BOMB']
+from .bfs import ACTIONS
 
 
 def setup(self):
