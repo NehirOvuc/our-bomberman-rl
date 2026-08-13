@@ -19,8 +19,10 @@ from .model import ACTIONS, Model
 from .dev_stubs import state_to_features_stub as state_to_features
 
 #: Relative path per interface_contract.md section 6 -- absolute paths break
-#: the Docker submission test.
-MODEL_PATH = 'agent_code/taco_kebab_agent/model_a.npz'
+#: the Docker submission test. Bare filename because SequentialAgentBackend
+#: (agents.py) chdirs into this agent's own directory before every callback,
+#: so this is already relative to agent_code/taco_kebab_agent/.
+MODEL_PATH = 'model_a.npz'
 
 
 def setup(self):
