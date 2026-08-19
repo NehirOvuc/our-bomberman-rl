@@ -29,6 +29,17 @@ SCENARIOS = {
     # Feel free to add more game modes and properties
     # game is created in environment.py -> BombeRLeWorld -> build_arena()
 }
+
+# --- training-env branch only, never merge to master -----------------------
+# Extra training scenarios. Optional on purpose: without training_scenarios.py
+# this is a no-op, so a stray merge cannot break anything.
+try:
+    from training_scenarios import TRAINING_SCENARIOS
+    SCENARIOS.update(TRAINING_SCENARIOS)
+except ImportError:
+    pass
+# ---------------------------------------------------------------------------
+
 MAX_AGENTS = 4
 
 # Round properties
