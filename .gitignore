@@ -113,5 +113,11 @@ replays/
 results/
 venv/
 
+<<<<<<< HEAD
 # Local working notes, not part of the submission
 docs/
+=======
+agent_code/taco_kebab_agent/*.npz
+
+agent_code/taco_kebab_agent/*.joblib
+>>>>>>> feature/train-callbacks-wiring

@@ -30,12 +30,12 @@ Fixed everywhere in the codebase — index `i` always means `ACTIONS[i]`.
 
 **Impacts:** `state_to_features(game_state: dict) -> np.ndarray`
 
-**Value chosen for N:** `34`
+**Value chosen for N:** `33`
 
 **Stub for Daniel and Ege to build against until feature freeze (18.08):**
 ```python
 def state_to_features_stub(game_state: dict) -> np.ndarray:
-    return np.random.randn(34).astype(np.float32)
+    return np.random.randn(FEATURE_DIM).astype(np.float32)
 ```
 
 **Constraint:** must run well within the 0.5s/step budget — Nehir benchmarks this in isolation.

@@ -1,99 +1,136 @@
-from collections import namedtuple, deque
+"""Training callbacks for taco_kebab_agent (interface_contract.md 'Reference' section).
 
-import pickle
-from typing import List
+Owns the training-only loop: raw per-step data -> n-step TD targets ->
+Model.update. state_to_features is reused from callbacks.py's own single
+switch point (dev_stubs.state_to_features_stub for now) rather than
+imported a second time here.
 
-import events as e
-from .callbacks import state_to_features
+Design decision: this first version relies on Model's own default of
+n_step=1, which collapses the general n-step windowing below to plain
+1-step TD: target = raw_reward + gamma * max_q(next_features). Generalizing
+to n>1 later is just a matter of changing n_step in Model's constructor --
+the windowing logic in game_events_occurred/end_of_round already handles
+it, no rewrite needed.
+"""
 
-# This is only an example!
-Transition = namedtuple('Transition',
-                        ('state', 'action', 'next_state', 'reward'))
+import numpy as np
 
-# Hyper parameters -- DO modify
-TRANSITION_HISTORY_SIZE = 3  # keep only ... last transitions
-RECORD_ENEMY_TRANSITIONS = 1.0  # record enemy transitions with probability ...
+from .callbacks import MODEL_PATH, state_to_features
+from .model import Transition
 
-# Events
-PLACEHOLDER_EVENT = "PLACEHOLDER"
+# Single switch point for the reward shaping function (interface_contract.md
+# section 7: stubs live in dev_stubs.py until the real function is ready).
+# Swap this one import for `from .rewards import reward_from_events` once
+# Ege's reward table (contract section 5) is wired in -- nothing else in
+# this file needs to change.
+from .dev_stubs import reward_from_events_stub as reward_from_events
+
+#: Transitions accumulated before an online Model.update call mid-round.
+BATCH_SIZE = 32
+
+
+def _n_step_return(rewards, gamma, bootstrap=None):
+    """Discounted sum of `rewards`, optionally plus a discounted bootstrap term.
+
+    With `bootstrap=None` this is the plain (truncated) Monte-Carlo return
+    used to flush the buffer at the end of a round. With a bootstrap value
+    it is the standard n-step TD target used mid-round.
+    """
+    target = sum(gamma ** k * r for k, r in enumerate(rewards))
+    if bootstrap is not None:
+        target += gamma ** len(rewards) * bootstrap
+    return target
 
 
 def setup_training(self):
     """
-    Initialise self for training purpose.
-
-    This is called after `setup` in callbacks.py.
+    Initialise self for training purpose. Called once, after setup() in callbacks.py.
 
     :param self: This object is passed to all callbacks and you can set arbitrary values.
     """
-    # Example: Setup an array that will note transition tuples
-    # (s, a, r, s')
-    self.transitions = deque(maxlen=TRANSITION_HISTORY_SIZE)
+    self.step_buffer = []          # raw per-step tuples, before n-step-return computation
+    self.pending_transitions = []  # fully-formed Transitions, ready for Model.update
+    self.round_reward = 0.0
+    self.round_transition_count = 0
 
 
-def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_state: dict, events: List[str]):
+def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_state: dict, events: list[str]):
     """
     Called once per step to allow intermediate rewards based on game events.
-
-    When this method is called, self.events will contain a list of all game
-    events relevant to your agent that occurred during the previous step. Consult
-    settings.py to see what events are tracked. You can hand out rewards to your
-    agent based on these events and your knowledge of the (new) game state.
-
-    This is *one* of the places where you could update your agent.
 
     :param self: This object is passed to all callbacks and you can set arbitrary values.
     :param old_game_state: The state that was passed to the last call of `act`.
     :param self_action: The action that you took.
     :param new_game_state: The state the agent is in now.
-    :param events: The events that occurred when going from  `old_game_state` to `new_game_state`
+    :param events: The events that occurred when going from `old_game_state` to `new_game_state`.
     """
     self.logger.debug(f'Encountered game event(s) {", ".join(map(repr, events))} in step {new_game_state["step"]}')
 
-    # Idea: Add your own events to hand out rewards
-    if ...:
-        events.append(PLACEHOLDER_EVENT)
+    features = state_to_features(old_game_state)
+    next_features = state_to_features(new_game_state)
+    raw_reward = reward_from_events(events, old_game_state, new_game_state)
+    self.round_reward += raw_reward
 
-    # state_to_features is defined in callbacks.py
-    self.transitions.append(Transition(state_to_features(old_game_state), self_action, state_to_features(new_game_state), reward_from_events(self, events)))
+    self.step_buffer.append((features, self_action, raw_reward, next_features, False))
+
+    n_step = self.model.n_step
+    if len(self.step_buffer) >= n_step:
+        oldest = self.step_buffer.pop(0)
+        window = [oldest] + self.step_buffer[:n_step - 1]
+        rewards = [entry[2] for entry in window]
+        bootstrap_features = window[-1][3]  # state n_step steps after `oldest`
+        bootstrap = float(np.max(self.model.predict_q(bootstrap_features)))
+        target = _n_step_return(rewards, self.model.gamma, bootstrap)
+
+        self.pending_transitions.append(Transition(
+            features=oldest[0], action=oldest[1], reward=target,
+            next_features=oldest[3], done=False))
+        self.round_transition_count += 1
+
+    if len(self.pending_transitions) >= BATCH_SIZE:
+        self.model.update(self.pending_transitions)
+        self.pending_transitions = []
 
 
-def end_of_round(self, last_game_state: dict, last_action: str, events: List[str]):
+def end_of_round(self, last_game_state: dict, last_action: str, events: list[str]):
     """
-    Called at the end of each game or when the agent died to hand out final rewards.
-    This replaces game_events_occurred in this round.
+    Called at the end of each round to hand out final rewards and train on the round.
 
-    This is similar to game_events_occurred. self.events will contain all events that
-    occurred during your agent's final step.
-
-    This is *one* of the places where you could update your agent.
-    This is also a good place to store an agent that you updated.
-
-    :param self: The same object that is passed to all of your callbacks.
+    :param self: This object is passed to all callbacks and you can set arbitrary values.
+    :param last_game_state: The state that was passed to the last call of `act`.
+    :param last_action: The action that was taken in response to `last_game_state`.
+    :param events: The events that occurred during the agent's final step.
     """
     self.logger.debug(f'Encountered event(s) {", ".join(map(repr, events))} in final step')
-    self.transitions.append(Transition(state_to_features(last_game_state), last_action, None, reward_from_events(self, events)))
 
-    # Store the model
-    with open("my-saved-model.pt", "wb") as file:
-        pickle.dump(self.model, file)
+    features = state_to_features(last_game_state)
+    raw_reward = reward_from_events(events, last_game_state, None)
+    self.round_reward += raw_reward
+    self.step_buffer.append((features, last_action, raw_reward, None, True))
 
+    # Flush the whole buffer: every remaining entry gets the actual return to
+    # the end of the episode, no bootstrap -- there is no future Q-value left
+    # to estimate once the round is over.
+    rewards = [entry[2] for entry in self.step_buffer]
+    for i, entry in enumerate(self.step_buffer):
+        target = _n_step_return(rewards[i:], self.model.gamma)
+        self.pending_transitions.append(Transition(
+            features=entry[0], action=entry[1], reward=target,
+            next_features=entry[3], done=entry[4]))
+        self.round_transition_count += 1
 
-def reward_from_events(self, events: List[str]) -> int:
-    """
-    *This is not a required function, but an idea to structure your code.*
+    self.model.update(self.pending_transitions)
 
-    Here you can modify the rewards your agent get so as to en/discourage
-    certain behavior.
-    """
-    game_rewards = {
-        e.COIN_COLLECTED: 1,
-        e.KILLED_OPPONENT: 5,
-        PLACEHOLDER_EVENT: -.1  # idea: the custom event is bad
-    }
-    reward_sum = 0
-    for event in events:
-        if event in game_rewards:
-            reward_sum += game_rewards[event]
-    self.logger.info(f"Awarded {reward_sum} for events {', '.join(events)}")
-    return reward_sum
+    try:
+        self.model.save(MODEL_PATH)
+    except Exception as err:
+        self.logger.error(f"Failed to save model to {MODEL_PATH}: {err}")
+
+    self.logger.info(
+        f"Round finished: total_reward={self.round_reward:.2f}, "
+        f"transitions_processed={self.round_transition_count}")
+
+    self.step_buffer = []
+    self.pending_transitions = []
+    self.round_reward = 0.0
+    self.round_transition_count = 0

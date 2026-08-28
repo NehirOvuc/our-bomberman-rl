@@ -7,14 +7,17 @@ to the team's GitHub repository. All members import these stubs from here
 
 import numpy as np
 
+from .features import FEATURE_DIM
+
 
 def state_to_features_stub(game_state: dict) -> np.ndarray:
     """Temporary stand-in for Nehir's state_to_features (contract sections 2-3).
 
-    Returns a random float32 vector of size 34, matching the shape and dtype
-    of the real state_to_features until feature freeze (18.08).
+    Returns a random float32 vector of FEATURE_DIM, matching the shape and
+    dtype of the real state_to_features. The size is imported rather than
+    written out, so the stub cannot drift from the real vector.
     """
-    return np.random.randn(34).astype(np.float32)
+    return np.random.randn(FEATURE_DIM).astype(np.float32)
 
 
 def reward_from_events_stub(events, old_game_state=None, new_game_state=None) -> float:
