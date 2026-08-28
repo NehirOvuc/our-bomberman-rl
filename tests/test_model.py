@@ -18,8 +18,9 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from agent_code.taco_kebab_agent.model import (  # noqa: E402
-    ACTIONS, N_FEATURES, Model, Transition)
+from agent_code.taco_kebab_agent.bfs import ACTIONS  # noqa: E402
+from agent_code.taco_kebab_agent.features import FEATURE_DIM  # noqa: E402
+from agent_code.taco_kebab_agent.model import Model, Transition  # noqa: E402
 
 
 def q(model, features, action):
@@ -31,7 +32,7 @@ def q(model, features, action):
 
 def test_predict_q_shape_and_dtype():
     model = Model()
-    q_values = model.predict_q(np.zeros(N_FEATURES, dtype=np.float32))
+    q_values = model.predict_q(np.zeros(FEATURE_DIM, dtype=np.float32))
     assert q_values.shape == (len(ACTIONS),)
     assert q_values.dtype == np.float32
 
@@ -43,22 +44,22 @@ def test_transition_field_order_matches_the_contract():
 
 def test_a_freshly_constructed_model_predicts_all_zeros():
     model = Model()
-    assert np.all(model.predict_q(np.zeros(N_FEATURES, dtype=np.float32)) == 0.0)
+    assert np.all(model.predict_q(np.zeros(FEATURE_DIM, dtype=np.float32)) == 0.0)
 
 
 def test_predict_q_rejects_the_wrong_feature_length():
     model = Model()
     try:
-        model.predict_q(np.zeros(N_FEATURES - 1, dtype=np.float32))
+        model.predict_q(np.zeros(FEATURE_DIM - 1, dtype=np.float32))
         assert False, "expected ValueError"
     except ValueError as err:
-        assert str(N_FEATURES) in str(err)
+        assert str(FEATURE_DIM) in str(err)
 
 
 def test_update_rejects_the_wrong_feature_length():
     model = Model()
     bad_transition = Transition(
-        features=np.zeros(N_FEATURES - 1, dtype=np.float32),
+        features=np.zeros(FEATURE_DIM - 1, dtype=np.float32),
         action='WAIT', reward=0.0, next_features=None, done=True)
     try:
         model.update([bad_transition])

@@ -11,12 +11,7 @@ import numpy as np
 
 from .model import ACTIONS, Model
 
-# Single switch point for the feature extractor (interface_contract.md
-# section 7: stubs live in dev_stubs.py until the real function is ready).
-# Swap this one import for `from .features import state_to_features` once
-# Nehir confirms her feature-freeze (18.08) version is stable -- nothing
-# else in this file needs to change.
-from .dev_stubs import state_to_features_stub as state_to_features
+from .features import state_to_features
 
 #: Relative path per interface_contract.md section 6 -- absolute paths break
 #: the Docker submission test. Bare filename because SequentialAgentBackend

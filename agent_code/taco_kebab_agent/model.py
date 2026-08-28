@@ -13,14 +13,14 @@ from collections import namedtuple
 
 import numpy as np
 
-ACTIONS = ['UP', 'DOWN', 'LEFT', 'RIGHT', 'BOMB', 'WAIT']
-N_FEATURES = 34
+from .features import FEATURE_DIM
+from .bfs import ACTIONS
 
 Transition = namedtuple('Transition', [
-    'features',       # np.ndarray (34,)
+    'features',       # np.ndarray (FEATURE_DIM,)
     'action',         # str, one of ACTIONS
     'reward',         # float — output of reward_from_events
-    'next_features',  # np.ndarray (34,) or None if terminal
+    'next_features',  # np.ndarray (FEATURE_DIM,) or None if terminal
     'done',           # bool
 ])
 
@@ -41,7 +41,7 @@ class Model:
     history. beta_a = solve(A_a, b_a) is re-solved after each update.
     """
 
-    def __init__(self, ridge_lambda: float = 1.0, n_features: int = N_FEATURES,
+    def __init__(self, ridge_lambda: float = 1.0, n_features: int = FEATURE_DIM,
                  n_step: int = 1, gamma: float = 0.99):
         self.ridge_lambda = ridge_lambda
         self.n_features = n_features
@@ -51,7 +51,12 @@ class Model:
         self.actions = ACTIONS
         dim = n_features + 1  # +1 for the bias term
 
-        self._A = {action: ridge_lambda * np.eye(dim, dtype=np.float64) for action in self.actions}
+        # Ridge penalty excludes the intercept (last augmented column): standard
+        # practice for ridge regression, and confirmed to matter here since
+        # actions accumulate transitions at different rates under epsilon-greedy.
+        penalty = ridge_lambda * np.eye(dim, dtype=np.float64)
+        penalty[-1, -1] = 0.0
+        self._A = {action: penalty.copy() for action in self.actions}
         self._b = {action: np.zeros(dim, dtype=np.float64) for action in self.actions}
         self._beta = {action: np.zeros(dim, dtype=np.float64) for action in self.actions}
 
