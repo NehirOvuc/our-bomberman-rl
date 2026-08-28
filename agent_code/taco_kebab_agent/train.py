@@ -18,12 +18,10 @@ import numpy as np
 from .callbacks import MODEL_PATH, state_to_features
 from .model import Transition
 
-# Single switch point for the reward shaping function (interface_contract.md
-# section 7: stubs live in dev_stubs.py until the real function is ready).
-# Swap this one import for `from .rewards import reward_from_events` once
-# Ege's reward table (contract section 5) is wired in -- nothing else in
-# this file needs to change.
-from .dev_stubs import reward_from_events_stub as reward_from_events
+# The real reward function (contract section 5). This replaced the
+# dev_stubs placeholder on 28.08.2026 -- the single switch point Daniel
+# left for exactly this swap.
+from .rewards import reward_from_events
 
 #: Transitions accumulated before an online Model.update call mid-round.
 BATCH_SIZE = 32
