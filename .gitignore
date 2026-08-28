@@ -112,3 +112,6 @@ screenshots/*.webm
 replays/
 results/
 venv/
+
+# Local working notes, not part of the submission
+docs/
