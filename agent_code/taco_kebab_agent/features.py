@@ -14,6 +14,8 @@ Three rules the vector follows (interface_contract.md sections 2 and 3):
    symmetry augmentation can permute indices instead of re-extracting.
 3. Every component is bounded in [0, 1], so a single ridge lambda suits all
    of them.
+4. No constant term. The intercept belongs to the model: a constant here is
+   not a description of the state, and it survives no ablation.
 """
 
 import numpy as np
@@ -54,7 +56,6 @@ FEATURE_NAMES = [
     'bomb_crate_count',             # 30
     'bomb_hits_opponent',           # 31
     'bomb_escape_possible',         # 32
-    'bias',                         # 33
 ]
 
 #: interface_contract.md section 2. Import this; do not hard-code the number.
@@ -155,8 +156,6 @@ def state_to_features(game_state: dict) -> np.ndarray:
         ok, _ = find_escape(v_free, here, v_lethal, safe_from(v_lethal),
                             blocked_now=others_set)
         phi[32] = float(ok)
-
-    phi[33] = 1.0
 
     return phi
 
