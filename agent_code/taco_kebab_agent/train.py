@@ -1,8 +1,7 @@
 """Training callbacks for taco_kebab_agent (interface_contract.md 'Reference' section).
 
 Owns the training-only loop: raw per-step data -> n-step TD targets ->
-Model.update. state_to_features is reused from callbacks.py's own single
-switch point (dev_stubs.state_to_features_stub for now) rather than
+Model.update. state_to_features is reused from callbacks.py rather than
 imported a second time here.
 
 Design decision: this first version relies on Model's own default of
@@ -17,6 +16,7 @@ import numpy as np
 
 from .callbacks import MODEL_PATH, state_to_features
 from .model import Transition
+from .symmetry import augment_transitions
 
 # Single switch point for the reward shaping function (interface_contract.md
 # section 7: stubs live in dev_stubs.py until the real function is ready).
@@ -88,7 +88,7 @@ def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_
         self.round_transition_count += 1
 
     if len(self.pending_transitions) >= BATCH_SIZE:
-        self.model.update(self.pending_transitions)
+        self.model.update(augment_transitions(self.pending_transitions))
         self.pending_transitions = []
 
 
@@ -119,7 +119,7 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: list[str
             next_features=entry[3], done=entry[4]))
         self.round_transition_count += 1
 
-    self.model.update(self.pending_transitions)
+    self.model.update(augment_transitions(self.pending_transitions))
 
     try:
         self.model.save(MODEL_PATH)
