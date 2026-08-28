@@ -113,6 +113,8 @@ replays/
 results/
 venv/
 
+# Local working notes, not part of the submission
+docs/
 agent_code/taco_kebab_agent/*.npz
 
 agent_code/taco_kebab_agent/*.joblib
