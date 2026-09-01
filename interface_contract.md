@@ -57,10 +57,10 @@ def state_to_features_stub(game_state: dict) -> np.ndarray:
 **Value chosen:**
 ```python
 Transition = namedtuple('Transition', [
-    'features',       # np.ndarray (34,)
+    'features',       # np.ndarray (33,)
     'action',         # str, one of ACTIONS
     'reward',         # float — output of reward_from_events
-    'next_features',  # np.ndarray (34,) or None if terminal
+    'next_features',  # np.ndarray (33,) or None if terminal
     'done',           # bool
 ])
 ```
