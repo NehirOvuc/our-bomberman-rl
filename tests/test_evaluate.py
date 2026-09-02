@@ -14,8 +14,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'tools'))
 
 import evaluate  # noqa: E402
-from evaluate import (append_log, check_agent_loaded_model,  # noqa: E402
-                      check_model_present, our_key, per_round, summarise)
+from evaluate import (append_log, build_parser,  # noqa: E402
+                      check_agent_loaded_model, check_model_present, our_key,
+                      per_round, summarise)
 
 
 def _stats(ours, **others):
@@ -147,12 +148,24 @@ def test_missing_model_file_aborts(tmp_path, monkeypatch):
         check_model_present('taco_kebab_agent')
 
 
-def test_either_model_format_satisfies_the_check(tmp_path, monkeypatch):
+@pytest.mark.parametrize('filename', ['model_a.npz', 'model_b.joblib'])
+def test_either_model_format_satisfies_the_check(tmp_path, monkeypatch, filename):
+    # Model A saves .npz and Model B .joblib (contract section 6); either is a
+    # trained model as far as this check is concerned.
+    directory = _agent_dir(tmp_path, 'taco_kebab_agent')
+    (directory / filename).write_bytes(b'weights')
     monkeypatch.setattr(evaluate, 'ROOT', tmp_path)
-    for filename in ('model_a.npz', 'model_b.joblib'):
-        directory = _agent_dir(tmp_path, filename)      # one agent per format
-        (directory / filename).write_bytes(b'')
-        check_model_present(filename)                   # must not raise
+    check_model_present('taco_kebab_agent')             # must not raise
+
+
+def test_an_empty_model_file_does_not_count(tmp_path, monkeypatch):
+    # A 0-byte file left by an interrupted save satisfies is_file() and loads
+    # as nothing, which is the failure this guard exists to prevent.
+    directory = _agent_dir(tmp_path, 'taco_kebab_agent')
+    (directory / 'model_a.npz').write_bytes(b'')
+    monkeypatch.setattr(evaluate, 'ROOT', tmp_path)
+    with pytest.raises(SystemExit, match='no trained model'):
+        check_model_present('taco_kebab_agent')
 
 
 def test_unknown_agent_directory_aborts(tmp_path, monkeypatch):
@@ -169,7 +182,7 @@ def test_fallback_to_an_untrained_model_aborts(tmp_path, monkeypatch):
         'INFO: setting up\nERROR: No trained model found at model_b.joblib\n')
     monkeypatch.setattr(evaluate, 'ROOT', tmp_path)
     with pytest.raises(SystemExit, match='played untrained'):
-        check_agent_loaded_model('taco_kebab_agent')
+        check_agent_loaded_model('taco_kebab_agent', 'taco_kebab_agent')
 
 
 def test_a_clean_log_passes(tmp_path, monkeypatch):
@@ -177,7 +190,32 @@ def test_a_clean_log_passes(tmp_path, monkeypatch):
     (directory / 'logs' / 'taco_kebab_agent.log').write_text(
         'INFO: Loading model from model_a.npz.\n')
     monkeypatch.setattr(evaluate, 'ROOT', tmp_path)
-    check_agent_loaded_model('taco_kebab_agent')        # must not raise
+    check_agent_loaded_model('taco_kebab_agent', 'taco_kebab_agent')  # no raise
+
+
+def test_a_stale_log_from_another_line_up_is_ignored(tmp_path, monkeypatch):
+    """agents.py truncates only the log named after *this* run's agent.
+
+    A mirror run leaves taco_kebab_agent_0.log .. _3.log behind; a later
+    tournament run rewrites only taco_kebab_agent.log. Globbing the directory
+    would read the stale files and abort a perfectly good evaluation for ever,
+    because *.log is gitignored and nothing cleans them up.
+    """
+    directory = _agent_dir(tmp_path, 'taco_kebab_agent')
+    (directory / 'logs' / 'taco_kebab_agent_0.log').write_text(
+        'ERROR: No trained model found at model_a.npz\n')     # stale
+    (directory / 'logs' / 'taco_kebab_agent.log').write_text(
+        'INFO: Loading model from model_a.npz.\n')            # this run
+    monkeypatch.setattr(evaluate, 'ROOT', tmp_path)
+    check_agent_loaded_model('taco_kebab_agent', 'taco_kebab_agent')  # no raise
+
+
+def test_a_missing_log_aborts_rather_than_passing(tmp_path, monkeypatch):
+    # Absence of evidence is not evidence the model loaded.
+    _agent_dir(tmp_path, 'taco_kebab_agent')
+    monkeypatch.setattr(evaluate, 'ROOT', tmp_path)
+    with pytest.raises(SystemExit, match='cannot read'):
+        check_agent_loaded_model('taco_kebab_agent', 'taco_kebab_agent')
 
 
 # --- the mirror line-up renames our agent ----------------------------------
@@ -207,16 +245,27 @@ def test_a_genuinely_absent_agent_still_raises():
 
 # --- scenario names come from settings, not from a literal list ------------
 
-def test_scenario_choices_track_settings():
-    """A hardcoded list could not name the scenarios it most needed to.
+def test_scenario_choices_come_from_settings(monkeypatch):
+    """Pins that the parser *reads* settings, rather than agreeing with it.
 
-    `crate-easy` and `crate-mid` are merged into settings.SCENARIOS by
-    training_scenarios.py on the training-env branch. The old literal list of
-    four made them impossible to pass on the one branch where they exist,
-    while the tool's description claimed to provide their stage gates.
+    Two earlier versions of this test were useless. The first compared
+    sorted(settings.SCENARIOS) with itself. The second read the choices off
+    the parser but only compared them to settings -- and on a master checkout
+    the old hardcoded literal happens to list exactly the four scenarios
+    settings defines, so reverting the fix still passed.
+
+    The only thing that separates "read from settings" from "a literal that
+    matches settings" is a scenario settings has and the literal cannot: the
+    training-env branch adds crate-easy and crate-mid the same way.
     """
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     import settings
-    parser_choices = sorted(settings.SCENARIOS)
-    assert 'classic' in parser_choices
-    # Whatever this checkout defines is exactly what the tool offers.
-    assert parser_choices == sorted(settings.SCENARIOS.keys())
+
+    monkeypatch.setitem(settings.SCENARIOS, 'crate-invented', {})
+    action = next(a for a in build_parser()._actions if a.dest == 'scenario')
+
+    assert 'crate-invented' in action.choices, (
+        'the parser is not reading settings.SCENARIOS')
+    assert sorted(action.choices) == sorted(settings.SCENARIOS)
+    # argparse never validates a default against choices, so pin it here.
+    assert action.default in action.choices

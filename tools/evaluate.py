@@ -29,7 +29,6 @@ Usage:
 import argparse
 import csv
 import json
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -55,8 +54,19 @@ ROOT = Path(__file__).resolve().parents[1]
 #: never merge to master, so on the submitted code those two scenarios are
 #: absent and the per-stage curriculum figures are not reproducible from the
 #: zip. They are training-time diagnostics, and the report says so.
-sys.path.insert(0, str(ROOT))
-import settings  # noqa: E402
+def scenario_names():
+    """Scenario names this checkout defines, read from settings.py.
+
+    Imported lazily and not at module scope: settings.py does
+    `from fallbacks import pygame`, and fallbacks.py calls `pygame.init()` on
+    import while catching only ModuleNotFoundError. Importing it at the top
+    would initialise SDL for every `import evaluate` -- including the test
+    suite, which only does arithmetic on dictionaries -- and would let anything
+    else pygame.init() raises take the whole tool down.
+    """
+    sys.path.insert(0, str(ROOT))
+    import settings
+    return sorted(settings.SCENARIOS)
 
 #: Evaluation seeds, deliberately disjoint from the 1-500 range we train on.
 #: PLAN.md asks for held-out seeds so we cannot report memorised layouts.
@@ -109,13 +119,27 @@ def git_commit():
         out = subprocess.run(['git', 'rev-parse', '--short', 'HEAD'],
                              cwd=ROOT, capture_output=True, text=True, timeout=10)
         commit = out.stdout.strip() or '?'
-        if commit == '?':
-            return commit
-        dirty = subprocess.run(['git', 'status', '--porcelain'],
-                               cwd=ROOT, capture_output=True, text=True, timeout=10)
-        return f'{commit}-dirty' if dirty.stdout.strip() else commit
     except (OSError, subprocess.SubprocessError):
         return '?'
+
+    if commit == '?':
+        return commit
+
+    # A separate try: if the dirty probe fails we still know the hash, and
+    # returning '?' instead would be strictly worse than an unknown tree state.
+    try:
+        dirty = subprocess.run(['git', 'status', '--porcelain'],
+                               cwd=ROOT, capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return commit
+
+    # experiments/ is excluded because this tool writes into it: the log file
+    # is tracked, so the first logged run dirties the tree and every row after
+    # it would read '-dirty' on an otherwise untouched checkout. The suffix has
+    # to mean "the code changed", not "the tool ran twice".
+    changed = [line for line in dirty.stdout.splitlines()
+               if line.strip() and not line[3:].startswith('experiments/')]
+    return f'{commit}-dirty' if changed else commit
 
 
 #: Model files an agent may carry: Model A saves .npz, Model B .joblib
@@ -144,7 +168,13 @@ def check_model_present(agent):
     directory = ROOT / 'agent_code' / agent
     if not directory.is_dir():
         raise SystemExit(f'no such agent directory: {directory.relative_to(ROOT)}')
-    if not any((directory / name).is_file() for name in MODEL_FILES):
+    def present(name):
+        # Size checked too: a 0-byte file left behind by an interrupted save
+        # satisfies is_file() and loads as nothing.
+        path = directory / name
+        return path.is_file() and path.stat().st_size > 0
+
+    if not any(present(name) for name in MODEL_FILES):
         raise SystemExit(
             f'{agent} has no trained model ({" or ".join(MODEL_FILES)}) in '
             f'{directory.relative_to(ROOT)}.\n'
@@ -153,25 +183,48 @@ def check_model_present(agent):
             'result. Train first, or pass --no-log if you meant to do this.')
 
 
-def check_agent_loaded_model(agent):
+#: How much of a log to read when looking for the fallback message. setup()
+#: runs once, before the first step, so the message is in the opening lines.
+#: The rest can be enormous: LOG_AGENT_CODE is DEBUG and act() logs a line per
+#: step, so a 100-round match writes tens of thousands of lines to a plain
+#: FileHandler that never rotates.
+LOG_HEAD_BYTES = 64 * 1024
+
+
+def check_agent_loaded_model(agent, recorded_name):
     """Fail if the agent logged that it fell back to an untrained model.
 
     The file check above cannot catch a model that exists but is not the one
     the agent looks for -- a Model B run with only `model_a.npz` present, say.
     The agent says so in its own log, so read it back after the first match.
+
+    Reads exactly the log this run wrote, not every log in the directory.
+    `agents.py` opens `agent_code/<code_name>/logs/<agent_name>.log` in mode
+    'w', and `agent_name` is the *renamed* one -- so a mirror line-up leaves
+    `<agent>_0.log` .. `_3.log` behind and a later tournament run truncates
+    only `<agent>.log`. Globbing would read those stale files and abort a
+    perfectly good evaluation, permanently, since *.log is gitignored and
+    nothing ever cleans them up.
     """
-    log_dir = ROOT / 'agent_code' / agent / 'logs'
-    for log in log_dir.glob('*.log'):
-        try:
-            if NO_MODEL_MESSAGE in log.read_text(errors='replace'):
-                raise SystemExit(
-                    f'{agent} logged "{NO_MODEL_MESSAGE}" during the first '
-                    f'match ({log.relative_to(ROOT)}).\n'
-                    'It played untrained, so these numbers measure nothing. '
-                    'Aborting before a row reaches the experiment log.')
-        except OSError:
-            # An unreadable log is not itself a reason to abort the run.
-            continue
+    log = ROOT / 'agent_code' / agent / 'logs' / f'{recorded_name}.log'
+    try:
+        with open(log, errors='replace') as handle:
+            head = handle.read(LOG_HEAD_BYTES)
+    except OSError as err:
+        # Absence of evidence is not evidence the model loaded. This check
+        # exists precisely to catch what the file check cannot, so it fails
+        # rather than passing quietly.
+        raise SystemExit(
+            f'cannot read {log.relative_to(ROOT)} to confirm {agent} loaded a '
+            f'model ({err}).\nAborting rather than logging a run that may '
+            'have measured an untrained agent.')
+
+    if NO_MODEL_MESSAGE in head:
+        raise SystemExit(
+            f'{agent} logged "{NO_MODEL_MESSAGE}" during the first match '
+            f'({log.relative_to(ROOT)}).\n'
+            'It played untrained, so these numbers measure nothing. '
+            'Aborting before a row reaches the experiment log.')
 
 
 def run_match(agent, opponents, scenario, seed, rounds, stats_path):
@@ -257,12 +310,19 @@ def summarise(rows, key):
     return mean, float(half_width)
 
 
-def evaluate(agent, opponents, lineup, scenario, seeds, rounds, keep_stats=None):
+def evaluate(agent, opponents, lineup, scenario, seeds, rounds, keep_stats=None,
+             verify_model=True):
     """Run one match per seed and aggregate. Returns a summary dict.
 
     `opponents` is the actual list of agent directories; `lineup` is only the
     name it is recorded under, so that 'mirror' reads as 'mirror' in the log
     rather than as three repetitions of a directory name.
+
+    `verify_model` is off for a --no-log run, which is the deliberate way to
+    measure an untrained agent -- how the performance floor in the report was
+    produced. Guarding a run that writes no row would make that impossible and
+    contradict what check_model_present's own error message tells the user
+    to do.
     """
     rows = []
 
@@ -280,15 +340,14 @@ def evaluate(agent, opponents, lineup, scenario, seeds, rounds, keep_stats=None)
             # run dies in environment.py's end() with PermissionError -- after
             # playing every round correctly. Only the default path was
             # affected; --keep-stats writes an ordinary file and always worked.
-            work = Path(tempfile.mkdtemp(prefix='evaluate_'))
-            try:
+            with tempfile.TemporaryDirectory(prefix='evaluate_') as work:
                 raw = run_match(agent, opponents, scenario, seed, rounds,
-                                work / 'stats.json')
-            finally:
-                shutil.rmtree(work, ignore_errors=True)
+                                Path(work) / 'stats.json')
         rows.append(per_round(raw, agent, rounds))
-        if len(rows) == 1:
-            check_agent_loaded_model(agent)
+        if len(rows) == 1 and verify_model:
+            # After the first match only: the log is truncated per run, and one
+            # match is enough to know whether setup() found its model.
+            check_agent_loaded_model(agent, our_key(raw, agent))
         print(f'  seed {seed}: score {rows[-1]["score"]:.2f}/round, '
               f'{rows[-1]["bombs"]:.1f} bombs, {rows[-1]["suicides"]:.2f} suicides')
 
@@ -366,7 +425,8 @@ def report(summary):
     return '\n'.join(lines)
 
 
-def main():
+def build_parser():
+    """Built separately from main() so a test can read back what it accepts."""
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--agent', default='taco_kebab_agent')
@@ -376,7 +436,7 @@ def main():
                         help='agent directory to use as all three opponents '
                              'when --lineup mirror is given')
     parser.add_argument('--scenario', default='classic',
-                        choices=sorted(settings.SCENARIOS))
+                        choices=scenario_names())
     parser.add_argument('--rounds', type=int, default=100)
     parser.add_argument('--seeds', type=int, nargs='+', default=EVAL_SEEDS)
     parser.add_argument('--version', default='',
@@ -387,7 +447,21 @@ def main():
                         help='keep the per-seed JSON files under results/')
     parser.add_argument('--no-log', action='store_true',
                         help='do not append a row to the experiment log')
+    return parser
+
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
+
+    # argparse type-converts a string default but never runs it through
+    # `choices`, so an unmet default reaches the subprocess and surfaces as a
+    # KeyError inside the child rather than as an argument error here. The old
+    # literal list at least guaranteed its own default was a member of itself.
+    available = scenario_names()
+    if args.scenario not in available:
+        parser.error(f'--scenario default {args.scenario!r} is not defined in '
+                     f'settings.SCENARIOS ({", ".join(available)})')
 
     lineup = args.lineup
     if lineup == 'mirror':
@@ -402,13 +476,21 @@ def main():
         # the escape hatch for deliberately measuring an untrained agent, which
         # is how the performance floor in the report was produced.
         check_model_present(args.agent)
+        if lineup == 'mirror':
+            # The opponent needs it too, and needs it most: a fresh version
+            # directory has no model file (they are gitignored), so three
+            # untrained copies would walk UP for four hundred steps, lose to
+            # anything, and the row would read as evidence that our agent beat
+            # the previous version.
+            check_model_present(args.mirror_agent)
 
     print(f'evaluating {args.agent} vs {opponents or "nobody"} on {args.scenario}, '
           f'{args.rounds} rounds x {len(args.seeds)} seeds, training off')
 
     summary = evaluate(args.agent, opponents, lineup, args.scenario,
                        args.seeds, args.rounds,
-                       keep_stats=(ROOT / 'results') if args.keep_stats else None)
+                       keep_stats=(ROOT / 'results') if args.keep_stats else None,
+                       verify_model=not args.no_log)
     print()
     print(report(summary))
 
