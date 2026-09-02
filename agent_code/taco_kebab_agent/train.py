@@ -33,9 +33,20 @@ from .rewards import reward_from_events
 #: factor rather than a different mechanism, and it reproduced the same
 #: amnesia. At this size nothing is evicted during a normal run, so the refit
 #: below is genuine fitted Q-iteration: all the experience, none of the stale
-#: targets. Roughly 57 MB of float32, which is training-time only -- the
+#: targets. Roughly 115 MB of float32, which is training-time only -- the
 #: submitted agent never allocates it.
-REPLAY_SIZE = 250000
+#:
+#: Raised from 250,000 on 02.09. At 250k it bound one arm of the A/B comparison
+#: and not the other: Model A generated 229,809 transitions over the curriculum
+#: and never evicted anything, while Model B -- which survives longer per round
+#: and so produces ~50% more transitions -- reached the cap during stage 4 and
+#: discarded roughly its first 80,000. That is a second, unintended difference
+#: between two arms whose entire purpose is to differ in one thing, and the
+#: sign of its effect is not even obvious: B held less experience than A, but
+#: what it evicted was the easy early curriculum, leaving its fit concentrated
+#: on the states the evaluation actually visits. Less data, more relevant data.
+#: Sized so that neither arm can reach it.
+REPLAY_SIZE = 500000
 
 #: Rounds between refits. Every refit recomputes every target in the buffer
 #: against the current Q-function and rebuilds the fit from scratch, so this
