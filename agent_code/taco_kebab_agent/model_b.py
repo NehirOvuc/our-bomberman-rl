@@ -83,9 +83,15 @@ class ModelB:
     def __init__(self, n_features: int = FEATURE_DIM, gamma: float = 0.99,
                  n_estimators: int = N_ESTIMATORS, max_depth: int = MAX_DEPTH,
                  min_samples_leaf: int = MIN_SAMPLES_LEAF,
-                 n_jobs: int = -1, random_state: int | None = 0):
+                 n_jobs: int = -1, random_state: int | None = 0,
+                 n_step: int = 1):
         self.n_features = n_features
         self.gamma = gamma
+        #: Length of the TD window train.py builds targets over. Parity with
+        #: Model A, which has carried this since the contract. It is read by
+        #: _refit_from_replay, not used here: this class only performs the
+        #: regression it is handed.
+        self.n_step = n_step
         self.n_estimators = n_estimators
         self.max_depth = max_depth
         self.min_samples_leaf = min_samples_leaf
@@ -234,6 +240,7 @@ class ModelB:
                 'max_depth': self.max_depth,
                 'min_samples_leaf': self.min_samples_leaf,
                 'random_state': self.random_state,
+                'n_step': self.n_step,
                 'forests': self._forests,
             },
             path,
@@ -261,6 +268,8 @@ class ModelB:
         self.max_depth = data['max_depth']
         self.min_samples_leaf = int(data['min_samples_leaf'])
         self.random_state = data['random_state']
+        # Files written before n_step existed mean the one-step target.
+        self.n_step = int(data.get('n_step', 1))
         self._forests = data['forests']
 
         # Belt and braces: a file written before _fit_action pinned n_jobs, or

@@ -21,6 +21,12 @@ from .features import state_to_features
 #: section 6 a controlled comparison instead of two separate agents.
 MODEL_KIND = os.environ.get('TACO_MODEL', 'a').lower()
 
+#: TD window length. 1 is the historical default. BOMB_TIMER (4) plus
+#: EXPLOSION_TIMER (2) is 6, so a bomb resolves six steps after it is dropped
+#: while the drop step itself pays nothing -- at n_step=1 the BOMB regression
+#: never sees its own consequence directly. Set TACO_NSTEP=5 to span the fuse.
+N_STEP = int(os.environ.get('TACO_NSTEP', '1'))
+
 #: Relative path per interface_contract.md section 6 -- absolute paths break
 #: the Docker submission test. Bare filename because SequentialAgentBackend
 #: (agents.py) chdirs into this agent's own directory before every callback,
@@ -43,8 +49,10 @@ def setup(self):
     #
     # Model B is the same pipeline with the linear Q swapped for a forest.
     # Nothing else differs -- same features, same rewards, same epsilon.
-    self.model = ModelB() if MODEL_KIND == 'b' else Model()
-    self.logger.info(f"Using model {MODEL_KIND.upper()} with weights at {MODEL_PATH}.")
+    self.model = (ModelB(n_step=N_STEP) if MODEL_KIND == 'b'
+                  else Model(n_step=N_STEP))
+    self.logger.info(f"Using model {MODEL_KIND.upper()} with weights at "
+                     f"{MODEL_PATH}, n_step={N_STEP}.")
     self.epsilon = 0.2  # exploration rate; tuned later via PLAN.md's hyperparameter grid search
 
     # Training continues from the saved weights when there are any. The

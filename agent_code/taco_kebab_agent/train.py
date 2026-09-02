@@ -187,18 +187,56 @@ def _refit_from_replay(self):
     if not rows:
         return
 
+    gamma = self.model.gamma
+    n_step = getattr(self.model, 'n_step', 1)
+
+    # n-step returns. The docstring on this module claimed the windowing was
+    # already handled; on the replay path it was not -- the target was
+    # hardcoded to reward + gamma * max_a Q(s', a) regardless of n_step.
+    #
+    # It matters most for the one action we care about. BOMB_TIMER is 4 and
+    # EXPLOSION_TIMER is 2, so a bomb resolves six steps after it is dropped
+    # while the drop step itself pays nothing. With a one-step target, BOMB's
+    # regression never sees its own consequence and has to receive it through
+    # six rounds of bootstrapping instead. Nehir measured what that costs on
+    # the linear model: the coefficient on bomb_crate_count is -0.08 at
+    # n_step=1 and +0.60 at n_step=5, a sign flip -- with a one-step target the
+    # model learns that destroying crates is bad.
+    #
+    # Walking forward through the buffer is safe because it is append-ordered
+    # and `done` marks the end of a round, so the window is truncated at a
+    # round boundary rather than running into the next round's rewards.
     rewards = np.array([r[2] for r in rows], dtype=np.float64)
-    bootstrap = np.zeros(len(rows), dtype=np.float64)
+    dones = np.array([r[4] for r in rows], dtype=bool)
 
-    # Terminal steps have no successor and bootstrap nothing. The rest are
-    # evaluated in one batched matrix product; doing it per transition would
-    # make refitting too slow to run at this cadence.
-    live = [i for i, r in enumerate(rows) if r[3] is not None]
-    if live:
-        next_features = np.stack([rows[i][3] for i in live])
-        bootstrap[live] = self.model.predict_q_batch(next_features).max(axis=1)
+    targets = np.zeros(len(rows), dtype=np.float64)
+    #: Index of the state each row bootstraps from, or -1 when the window ran
+    #: into the end of a round and there is nothing left to bootstrap.
+    tail = np.full(len(rows), -1, dtype=np.int64)
 
-    targets = rewards + self.model.gamma * bootstrap
+    for i in range(len(rows)):
+        discounted = 0.0
+        k = 0
+        while k < n_step and i + k < len(rows):
+            discounted += (gamma ** k) * rewards[i + k]
+            if dones[i + k]:
+                break
+            k += 1
+        else:
+            # The window closed without hitting a terminal step, so there is a
+            # successor to bootstrap from: the next_features of the last row in
+            # the window.
+            if i + k - 1 < len(rows) and rows[i + k - 1][3] is not None:
+                tail[i] = i + k - 1
+        targets[i] = discounted
+
+    # One batched matrix product for every bootstrap in the buffer; doing it
+    # per transition would make refitting too slow to run at this cadence.
+    live = np.flatnonzero(tail >= 0)
+    if len(live):
+        next_features = np.stack([rows[tail[i]][3] for i in live])
+        best_next = self.model.predict_q_batch(next_features).max(axis=1)
+        targets[live] += (gamma ** n_step) * best_next
 
     self.model.refit([
         Transition(features=r[0], action=r[1], reward=float(target),
@@ -206,7 +244,8 @@ def _refit_from_replay(self):
         for r, target in zip(rows, targets)
     ])
     self.rounds_since_refit = 0
-    self.logger.info(f"Refit on {len(rows)} buffered transitions.")
+    self.logger.info(
+        f"Refit on {len(rows)} buffered transitions, n_step={n_step}.")
 
 
 def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_state: dict, events: list[str]):
