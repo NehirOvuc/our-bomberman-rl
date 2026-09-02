@@ -44,6 +44,20 @@ from scipy import stats
 #: zipped into the Docker image and absolute paths break there.
 ROOT = Path(__file__).resolve().parents[1]
 
+#: Scenario names are read from settings.py, not written out here. The four on
+#: master are not the whole set: `training_scenarios.py` on the `training-env`
+#: branch merges `crate-easy` and `crate-mid` into `settings.SCENARIOS`, and a
+#: hardcoded list made those impossible to pass on the very branch where they
+#: exist. Reading the dict means the tool offers exactly what this checkout
+#: has, and stops claiming to accept scenarios it does not.
+#:
+#: Note what this does not fix, because nothing here can: `training-env` must
+#: never merge to master, so on the submitted code those two scenarios are
+#: absent and the per-stage curriculum figures are not reproducible from the
+#: zip. They are training-time diagnostics, and the report says so.
+sys.path.insert(0, str(ROOT))
+import settings  # noqa: E402
+
 #: Evaluation seeds, deliberately disjoint from the 1-500 range we train on.
 #: PLAN.md asks for held-out seeds so we cannot report memorised layouts.
 EVAL_SEEDS = list(range(900, 910))
@@ -362,7 +376,7 @@ def main():
                         help='agent directory to use as all three opponents '
                              'when --lineup mirror is given')
     parser.add_argument('--scenario', default='classic',
-                        choices=['empty', 'coin-heaven', 'loot-crate', 'classic'])
+                        choices=sorted(settings.SCENARIOS))
     parser.add_argument('--rounds', type=int, default=100)
     parser.add_argument('--seeds', type=int, nargs='+', default=EVAL_SEEDS)
     parser.add_argument('--version', default='',

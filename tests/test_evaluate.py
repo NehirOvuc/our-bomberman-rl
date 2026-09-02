@@ -203,3 +203,20 @@ def test_unrenamed_agent_still_resolves():
 def test_a_genuinely_absent_agent_still_raises():
     with pytest.raises(KeyError):
         our_key({'by_agent': {'someone_else': {}}}, 'us')
+
+
+# --- scenario names come from settings, not from a literal list ------------
+
+def test_scenario_choices_track_settings():
+    """A hardcoded list could not name the scenarios it most needed to.
+
+    `crate-easy` and `crate-mid` are merged into settings.SCENARIOS by
+    training_scenarios.py on the training-env branch. The old literal list of
+    four made them impossible to pass on the one branch where they exist,
+    while the tool's description claimed to provide their stage gates.
+    """
+    import settings
+    parser_choices = sorted(settings.SCENARIOS)
+    assert 'classic' in parser_choices
+    # Whatever this checkout defines is exactly what the tool offers.
+    assert parser_choices == sorted(settings.SCENARIOS.keys())
