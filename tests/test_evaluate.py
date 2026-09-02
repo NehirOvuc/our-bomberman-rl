@@ -14,9 +14,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'tools'))
 
 import evaluate  # noqa: E402
-from evaluate import (append_log, build_parser,  # noqa: E402
-                      check_agent_loaded_model, check_model_present, our_key,
-                      per_round, summarise)
+from evaluate import (FRAMEWORK_AGENTS, append_log, build_parser,  # noqa: E402
+                      check_agent_loaded_model, check_model_present,
+                      git_commit, our_key, per_round, summarise)
 
 
 def _stats(ours, **others):
@@ -269,3 +269,60 @@ def test_scenario_choices_come_from_settings(monkeypatch):
     assert sorted(action.choices) == sorted(settings.SCENARIOS)
     # argparse never validates a default against choices, so pin it here.
     assert action.default in action.choices
+
+
+# --- the commit stamp must not claim a clean tree it never checked ---------
+
+def _fake_git(monkeypatch, status_rc=0, status_out='', status_raises=None):
+    """Stub subprocess.run: rev-parse always succeeds, git status is scripted."""
+    import subprocess as sp
+    from types import SimpleNamespace
+
+    def fake(cmd, **kw):
+        if 'rev-parse' in cmd:
+            return SimpleNamespace(returncode=0, stdout='9adc909\n')
+        if status_raises:
+            raise status_raises
+        return SimpleNamespace(returncode=status_rc, stdout=status_out)
+
+    monkeypatch.setattr(evaluate.subprocess, 'run', fake)
+
+
+def test_clean_tree_records_a_bare_hash(monkeypatch):
+    _fake_git(monkeypatch)
+    assert git_commit() == '9adc909'
+
+
+def test_changed_code_is_marked_dirty(monkeypatch):
+    _fake_git(monkeypatch, status_out=' M tools/evaluate.py\n')
+    assert git_commit() == '9adc909-dirty'
+
+
+def test_a_failed_dirty_probe_says_unknown_rather_than_clean(monkeypatch):
+    """The whole point of the stamp is tracing a number back to its code.
+
+    Returning the bare hash when the probe failed would assert a clean tree we
+    never actually looked at -- the failure mode the docstring calls worse than
+    recording nothing. A timeout is a SubprocessError, so this is reachable on
+    any large or contended repository.
+    """
+    import subprocess as sp
+    _fake_git(monkeypatch, status_raises=sp.TimeoutExpired('git', 10))
+    assert git_commit() == '9adc909-unknown'
+
+
+def test_a_nonzero_status_exit_also_says_unknown(monkeypatch):
+    # A non-zero exit leaves stdout empty, which the old code read as "clean".
+    _fake_git(monkeypatch, status_rc=128, status_out='')
+    assert git_commit() == '9adc909-unknown'
+
+
+# --- the model guard must not fire on the framework's own baselines --------
+
+def test_framework_baselines_are_exempt_from_the_model_guard():
+    """`--lineup mirror --mirror-agent random_agent` is the only way to get a
+    three-random baseline. Demanding a trained model from an agent that has
+    none by design would make that comparison impossible to record."""
+    for name in ('random_agent', 'rule_based_agent', 'coin_collector_agent'):
+        assert name in FRAMEWORK_AGENTS
+    assert 'taco_kebab_agent' not in FRAMEWORK_AGENTS
