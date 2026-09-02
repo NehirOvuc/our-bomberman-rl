@@ -29,6 +29,7 @@ Usage:
 import argparse
 import csv
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -82,13 +83,81 @@ LOG_FIELDS = ['date', 'commit', 'agent', 'version', 'scenario', 'lineup',
 
 
 def git_commit():
-    """Short hash of the code that produced a result, or '?' outside a repo."""
+    """Short hash of the code that produced a result, or '?' outside a repo.
+
+    Suffixed with '-dirty' when the working tree has uncommitted changes.
+    Without it a row can name a commit that is not what produced it, which is
+    worse than naming nothing: the log exists so a number can be traced back
+    to the code behind it, and a hash that is confidently wrong breaks exactly
+    that.
+    """
     try:
         out = subprocess.run(['git', 'rev-parse', '--short', 'HEAD'],
                              cwd=ROOT, capture_output=True, text=True, timeout=10)
-        return out.stdout.strip() or '?'
+        commit = out.stdout.strip() or '?'
+        if commit == '?':
+            return commit
+        dirty = subprocess.run(['git', 'status', '--porcelain'],
+                               cwd=ROOT, capture_output=True, text=True, timeout=10)
+        return f'{commit}-dirty' if dirty.stdout.strip() else commit
     except (OSError, subprocess.SubprocessError):
         return '?'
+
+
+#: Model files an agent may carry: Model A saves .npz, Model B .joblib
+#: (interface_contract.md section 6).
+MODEL_FILES = ('model_a.npz', 'model_b.joblib')
+
+#: What callbacks.setup() logs when it cannot find a model and falls back to an
+#: untrained one. Matched literally; if that message is reworded this check
+#: goes quiet, so the two belong together in review.
+NO_MODEL_MESSAGE = 'No trained model found'
+
+
+def check_model_present(agent):
+    """Refuse to evaluate an agent that has no trained model on disk.
+
+    Without this the run completes and produces a full, plausible table. An
+    absent model file is not an error anywhere: setup() logs and carries on
+    with an all-zero model, argmax over six zeros returns index 0, and
+    ACTIONS[0] is UP -- so the agent walks into the top wall for four hundred
+    steps and every metric is a real measurement of that. The row then lands
+    in the experiment log looking exactly like a result.
+
+    This is the default state on a fresh clone rather than an edge case:
+    *.npz and *.joblib are both gitignored.
+    """
+    directory = ROOT / 'agent_code' / agent
+    if not directory.is_dir():
+        raise SystemExit(f'no such agent directory: {directory.relative_to(ROOT)}')
+    if not any((directory / name).is_file() for name in MODEL_FILES):
+        raise SystemExit(
+            f'{agent} has no trained model ({" or ".join(MODEL_FILES)}) in '
+            f'{directory.relative_to(ROOT)}.\n'
+            'Refusing to evaluate: an untrained model plays a valid-looking '
+            'game (it walks UP for the whole round) and would be logged as a '
+            'result. Train first, or pass --no-log if you meant to do this.')
+
+
+def check_agent_loaded_model(agent):
+    """Fail if the agent logged that it fell back to an untrained model.
+
+    The file check above cannot catch a model that exists but is not the one
+    the agent looks for -- a Model B run with only `model_a.npz` present, say.
+    The agent says so in its own log, so read it back after the first match.
+    """
+    log_dir = ROOT / 'agent_code' / agent / 'logs'
+    for log in log_dir.glob('*.log'):
+        try:
+            if NO_MODEL_MESSAGE in log.read_text(errors='replace'):
+                raise SystemExit(
+                    f'{agent} logged "{NO_MODEL_MESSAGE}" during the first '
+                    f'match ({log.relative_to(ROOT)}).\n'
+                    'It played untrained, so these numbers measure nothing. '
+                    'Aborting before a row reaches the experiment log.')
+        except OSError:
+            # An unreadable log is not itself a reason to abort the run.
+            continue
 
 
 def run_match(agent, opponents, scenario, seed, rounds, stats_path):
@@ -116,12 +185,31 @@ def run_match(agent, opponents, scenario, seed, rounds, stats_path):
         return json.load(handle)
 
 
+def our_key(stats, agent):
+    """The name our agent is recorded under in `by_agent`.
+
+    `setup_agents` (environment.py) renames duplicates to name_0 / name_1
+    whenever the same directory appears more than once, which is precisely
+    what the mirror line-up does when --mirror-agent is our own agent. The
+    plain name is then absent and a direct lookup raises KeyError.
+    """
+    by_agent = stats['by_agent']
+    if agent in by_agent:
+        return agent
+    if f'{agent}_0' in by_agent:
+        return f'{agent}_0'
+    raise KeyError(
+        f'{agent} is not in by_agent (found {sorted(by_agent)}); '
+        'the framework may have renamed it.')
+
+
 def per_round(stats, agent, rounds):
     """Our agent's per-round means for one match, plus the opponents' best.
 
     `by_agent` holds lifetime totals over every round, so dividing by the
     number of rounds is the mean. Missing keys are genuine zeros.
     """
+    agent = our_key(stats, agent)
     ours = stats['by_agent'][agent]
     row = {key: ours.get(key, 0) / rounds for key in COUNTERS}
 
@@ -172,10 +260,21 @@ def evaluate(agent, opponents, lineup, scenario, seeds, rounds, keep_stats=None)
         else:
             # A temp file we do not keep: the aggregate is what matters, and
             # results/ should not fill up with one file per seed by default.
-            with tempfile.NamedTemporaryFile(suffix='.json') as handle:
+            #
+            # A directory rather than NamedTemporaryFile: that holds the file
+            # open exclusively on Windows, so main.py cannot write it and the
+            # run dies in environment.py's end() with PermissionError -- after
+            # playing every round correctly. Only the default path was
+            # affected; --keep-stats writes an ordinary file and always worked.
+            work = Path(tempfile.mkdtemp(prefix='evaluate_'))
+            try:
                 raw = run_match(agent, opponents, scenario, seed, rounds,
-                                Path(handle.name))
+                                work / 'stats.json')
+            finally:
+                shutil.rmtree(work, ignore_errors=True)
         rows.append(per_round(raw, agent, rounds))
+        if len(rows) == 1:
+            check_agent_loaded_model(agent)
         print(f'  seed {seed}: score {rows[-1]["score"]:.2f}/round, '
               f'{rows[-1]["bombs"]:.1f} bombs, {rows[-1]["suicides"]:.2f} suicides')
 
@@ -283,6 +382,12 @@ def main():
         opponents = [args.mirror_agent] * 3
     else:
         opponents = LINEUPS[lineup]
+
+    if not args.no_log:
+        # Only a run that will be recorded has to be trustworthy; --no-log is
+        # the escape hatch for deliberately measuring an untrained agent, which
+        # is how the performance floor in the report was produced.
+        check_model_present(args.agent)
 
     print(f'evaluating {args.agent} vs {opponents or "nobody"} on {args.scenario}, '
           f'{args.rounds} rounds x {len(args.seeds)} seeds, training off')
