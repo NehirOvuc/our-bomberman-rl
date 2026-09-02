@@ -13,7 +13,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'tools'))
 
-from evaluate import append_log, per_round, summarise  # noqa: E402
+import evaluate  # noqa: E402
+from evaluate import (append_log, check_agent_loaded_model,  # noqa: E402
+                      check_model_present, our_key, per_round, summarise)
 
 
 def _stats(ours, **others):
@@ -122,3 +124,82 @@ def test_log_leaves_seeds_won_blank_when_there_was_nobody_to_beat(tmp_path):
     path = tmp_path / 'log.csv'
     append_log(_summary(), 'v1', '', path=path)
     assert list(csv.DictReader(open(path)))[0]['seeds_won'] == ''
+
+
+# --- refusing to record a run that measured nothing ------------------------
+#
+# An absent model file is not an error anywhere downstream: setup() logs and
+# carries on with an all-zero model, argmax over six zeros is index 0, and
+# ACTIONS[0] is UP. The agent then walks into the top wall for the whole round
+# and every metric is a truthful measurement of that. Since *.npz and *.joblib
+# are gitignored, this is the default state of a fresh clone.
+
+def _agent_dir(tmp_path, name='taco_kebab_agent'):
+    directory = tmp_path / 'agent_code' / name
+    (directory / 'logs').mkdir(parents=True)
+    return directory
+
+
+def test_missing_model_file_aborts(tmp_path, monkeypatch):
+    _agent_dir(tmp_path)
+    monkeypatch.setattr(evaluate, 'ROOT', tmp_path)
+    with pytest.raises(SystemExit, match='no trained model'):
+        check_model_present('taco_kebab_agent')
+
+
+def test_either_model_format_satisfies_the_check(tmp_path, monkeypatch):
+    monkeypatch.setattr(evaluate, 'ROOT', tmp_path)
+    for filename in ('model_a.npz', 'model_b.joblib'):
+        directory = _agent_dir(tmp_path, filename)      # one agent per format
+        (directory / filename).write_bytes(b'')
+        check_model_present(filename)                   # must not raise
+
+
+def test_unknown_agent_directory_aborts(tmp_path, monkeypatch):
+    monkeypatch.setattr(evaluate, 'ROOT', tmp_path)
+    with pytest.raises(SystemExit, match='no such agent directory'):
+        check_model_present('not_an_agent')
+
+
+def test_fallback_to_an_untrained_model_aborts(tmp_path, monkeypatch):
+    # The file check cannot catch a model that exists but is not the one the
+    # agent looks for. The agent says so in its own log, so we read it back.
+    directory = _agent_dir(tmp_path)
+    (directory / 'logs' / 'taco_kebab_agent.log').write_text(
+        'INFO: setting up\nERROR: No trained model found at model_b.joblib\n')
+    monkeypatch.setattr(evaluate, 'ROOT', tmp_path)
+    with pytest.raises(SystemExit, match='played untrained'):
+        check_agent_loaded_model('taco_kebab_agent')
+
+
+def test_a_clean_log_passes(tmp_path, monkeypatch):
+    directory = _agent_dir(tmp_path)
+    (directory / 'logs' / 'taco_kebab_agent.log').write_text(
+        'INFO: Loading model from model_a.npz.\n')
+    monkeypatch.setattr(evaluate, 'ROOT', tmp_path)
+    check_agent_loaded_model('taco_kebab_agent')        # must not raise
+
+
+# --- the mirror line-up renames our agent ----------------------------------
+
+def test_duplicate_agent_directories_are_resolved():
+    # setup_agents renames duplicates to name_0 / name_1 (environment.py), which
+    # is what --lineup mirror does when --mirror-agent is our own agent. A plain
+    # lookup would raise KeyError on the one line-up designed to use it.
+    stats = {'by_agent': {'us_0': {'score': 8, 'steps': 100},
+                          'us_1': {'score': 4, 'steps': 100},
+                          'us_2': {'score': 2, 'steps': 100}}}
+    assert our_key(stats, 'us') == 'us_0'
+    row = per_round(stats, 'us', 4)
+    assert row['score'] == 2.0
+    # ...and our own renamed row must not be counted as an opponent.
+    assert row['best_opponent'] == 1.0
+
+
+def test_unrenamed_agent_still_resolves():
+    assert our_key({'by_agent': {'us': {}}}, 'us') == 'us'
+
+
+def test_a_genuinely_absent_agent_still_raises():
+    with pytest.raises(KeyError):
+        our_key({'by_agent': {'someone_else': {}}}, 'us')
