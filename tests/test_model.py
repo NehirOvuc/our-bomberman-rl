@@ -216,3 +216,50 @@ def test_forget_survives_save_and_load(tmp_path, monkeypatch):
     loaded = Model()
     loaded.load('m.npz')
     assert loaded.forget == pytest.approx(0.95)
+
+
+# --- replay refit ----------------------------------------------------------
+
+def test_batched_prediction_matches_one_at_a_time():
+    m = Model()
+    m.update([Transition(features=np.ones(FEATURE_DIM, dtype=np.float32), action='UP',
+                         reward=3.0, next_features=None, done=True)])
+    states = np.random.RandomState(0).rand(7, FEATURE_DIM).astype(np.float32)
+    batched = m.predict_q_batch(states)
+    one_by_one = np.stack([m.predict_q(s) for s in states])
+    assert np.allclose(batched, one_by_one, atol=1e-5)
+
+
+def test_refit_forgets_the_old_target_completely():
+    # The property the replay buffer exists for, and the one the forgetting
+    # factor could only approximate: after a refit, data that is not in the
+    # batch has no influence at all.
+    phi = np.ones(FEATURE_DIM, dtype=np.float32)
+    m = Model()
+    for _ in range(50):
+        m.update([Transition(features=phi, action='BOMB', reward=10.0,
+                             next_features=None, done=True)])
+    assert m.predict_q(phi)[ACTIONS.index('BOMB')] > 5
+
+    m.refit([Transition(features=phi, action='BOMB', reward=-10.0,
+                        next_features=None, done=True)])
+    assert m.predict_q(phi)[ACTIONS.index('BOMB')] < 0
+
+
+def test_refit_does_not_let_the_statistics_grow():
+    m = Model()
+    batch = [Transition(features=np.ones(FEATURE_DIM, dtype=np.float32), action='BOMB',
+                        reward=1.0, next_features=None, done=True)]
+    m.refit(batch)
+    first = np.linalg.norm(m._A['BOMB'])
+    for _ in range(100):
+        m.refit(batch)
+    assert np.linalg.norm(m._A['BOMB']) == pytest.approx(first)
+
+
+def test_refit_leaves_the_ridge_penalty_in_place():
+    # Refitting resets to the penalty, not to zero, or a sparsely-visited
+    # action would give a singular matrix on the next solve.
+    m = Model()
+    m.refit([])
+    assert np.linalg.norm(m._A['WAIT']) > 0

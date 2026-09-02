@@ -26,13 +26,11 @@ def setup(self):
 
     :param self: This object is passed to all callbacks and you can set arbitrary values.
     """
-    # forget < 1 discounts the accumulated fit statistics before each batch,
-    # so a target computed from an early, bad Q-function stops outweighing a
-    # recent one. Measured motivation in docs/CHANGELOG.md, 02.09.2026: without
-    # it the effective learning rate decays over a run, and the final stage of a
-    # curriculum is the stage least able to learn. 0.99 is a starting value, not
-    # a tuned one -- roughly a hundred update calls of memory.
-    self.model = Model(forget=0.99)
+    # forget stays at its default of 1.0 on this branch: train.py refits from
+    # a replay buffer instead, which throws the old statistics away wholesale
+    # rather than fading them, so a discount on top would be a second
+    # mechanism doing the same job less well.
+    self.model = Model()
     self.epsilon = 0.2  # exploration rate; tuned later via PLAN.md's hyperparameter grid search
 
     # Training continues from the saved weights when there are any. The

@@ -13,6 +13,8 @@ the windowing logic in game_events_occurred/end_of_round already handles
 it, no rewrite needed.
 """
 
+from collections import deque
+
 import numpy as np
 
 from .callbacks import MODEL_PATH, state_to_features
@@ -23,8 +25,21 @@ from .model import Transition
 # left for exactly this swap.
 from .rewards import reward_from_events
 
-#: Transitions accumulated before an online Model.update call mid-round.
-BATCH_SIZE = 32
+#: Raw transitions kept for refitting. Sized to hold an entire training run,
+#: not a recent window: a 4000-round curriculum is about 211,000 steps, so the
+#: first attempt at 20,000 held only the last 9.5% of it and never spanned more
+#: than the final stage. That made it a hard-cutoff version of the forgetting
+#: factor rather than a different mechanism, and it reproduced the same
+#: amnesia. At this size nothing is evicted during a normal run, so the refit
+#: below is genuine fitted Q-iteration: all the experience, none of the stale
+#: targets. Roughly 57 MB of float32, which is training-time only -- the
+#: submitted agent never allocates it.
+REPLAY_SIZE = 250000
+
+#: Rounds between refits. Every refit recomputes every target in the buffer
+#: against the current Q-function and rebuilds the fit from scratch, so this
+#: trades compute for freshness. 25 is a starting value, not a tuned one.
+REFIT_EVERY = 25
 
 
 def _n_step_return(rewards, gamma, bootstrap=None):
@@ -46,10 +61,50 @@ def setup_training(self):
 
     :param self: This object is passed to all callbacks and you can set arbitrary values.
     """
-    self.step_buffer = []          # raw per-step tuples, before n-step-return computation
-    self.pending_transitions = []  # fully-formed Transitions, ready for Model.update
+    #: Raw experience: (features, action, reward, next_features, done). The
+    #: reward stored here is the immediate reward, NOT a TD target -- targets
+    #: are recomputed from scratch at every refit against the current
+    #: Q-function, which is the whole point. A target computed in round 1 from
+    #: a zero Q-function is simply wrong by round 4000, and the previous
+    #: incremental version had no way to correct it.
+    self.replay = deque(maxlen=REPLAY_SIZE)
+    self.rounds_since_refit = 0
     self.round_reward = 0.0
     self.round_transition_count = 0
+
+
+def _refit_from_replay(self):
+    """Recompute every target against the current Q, then refit from scratch.
+
+    This is one step of fitted Q-iteration. The targets are the same one-step
+    TD targets the incremental version used --- reward + gamma * max_a Q(s', a),
+    or just the reward on a terminal step --- so the only thing that has changed
+    is when they are computed and that the fit does not carry old statistics.
+    """
+    rows = list(self.replay)
+    if not rows:
+        return
+
+    rewards = np.array([r[2] for r in rows], dtype=np.float64)
+    bootstrap = np.zeros(len(rows), dtype=np.float64)
+
+    # Terminal steps have no successor and bootstrap nothing. The rest are
+    # evaluated in one batched matrix product; doing it per transition would
+    # make refitting too slow to run at this cadence.
+    live = [i for i, r in enumerate(rows) if r[3] is not None]
+    if live:
+        next_features = np.stack([rows[i][3] for i in live])
+        bootstrap[live] = self.model.predict_q_batch(next_features).max(axis=1)
+
+    targets = rewards + self.model.gamma * bootstrap
+
+    self.model.refit([
+        Transition(features=r[0], action=r[1], reward=float(target),
+                   next_features=r[3], done=r[4])
+        for r, target in zip(rows, targets)
+    ])
+    self.rounds_since_refit = 0
+    self.logger.info(f"Refit on {len(rows)} buffered transitions.")
 
 
 def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_state: dict, events: list[str]):
@@ -64,30 +119,12 @@ def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_
     """
     self.logger.debug(f'Encountered game event(s) {", ".join(map(repr, events))} in step {new_game_state["step"]}')
 
-    features = state_to_features(old_game_state)
-    next_features = state_to_features(new_game_state)
     raw_reward = reward_from_events(events, old_game_state, new_game_state)
     self.round_reward += raw_reward
 
-    self.step_buffer.append((features, self_action, raw_reward, next_features, False))
-
-    n_step = self.model.n_step
-    if len(self.step_buffer) >= n_step:
-        oldest = self.step_buffer.pop(0)
-        window = [oldest] + self.step_buffer[:n_step - 1]
-        rewards = [entry[2] for entry in window]
-        bootstrap_features = window[-1][3]  # state n_step steps after `oldest`
-        bootstrap = float(np.max(self.model.predict_q(bootstrap_features)))
-        target = _n_step_return(rewards, self.model.gamma, bootstrap)
-
-        self.pending_transitions.append(Transition(
-            features=oldest[0], action=oldest[1], reward=target,
-            next_features=oldest[3], done=False))
-        self.round_transition_count += 1
-
-    if len(self.pending_transitions) >= BATCH_SIZE:
-        self.model.update(self.pending_transitions)
-        self.pending_transitions = []
+    self.replay.append((state_to_features(old_game_state), self_action, raw_reward,
+                        state_to_features(new_game_state), False))
+    self.round_transition_count += 1
 
 
 def end_of_round(self, last_game_state: dict, last_action: str, events: list[str]):
@@ -101,23 +138,15 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: list[str
     """
     self.logger.debug(f'Encountered event(s) {", ".join(map(repr, events))} in final step')
 
-    features = state_to_features(last_game_state)
     raw_reward = reward_from_events(events, last_game_state, None)
     self.round_reward += raw_reward
-    self.step_buffer.append((features, last_action, raw_reward, None, True))
+    self.replay.append((state_to_features(last_game_state), last_action, raw_reward,
+                        None, True))
+    self.round_transition_count += 1
 
-    # Flush the whole buffer: every remaining entry gets the actual return to
-    # the end of the episode, no bootstrap -- there is no future Q-value left
-    # to estimate once the round is over.
-    rewards = [entry[2] for entry in self.step_buffer]
-    for i, entry in enumerate(self.step_buffer):
-        target = _n_step_return(rewards[i:], self.model.gamma)
-        self.pending_transitions.append(Transition(
-            features=entry[0], action=entry[1], reward=target,
-            next_features=entry[3], done=entry[4]))
-        self.round_transition_count += 1
-
-    self.model.update(self.pending_transitions)
+    self.rounds_since_refit += 1
+    if self.rounds_since_refit >= REFIT_EVERY:
+        _refit_from_replay(self)
 
     try:
         self.model.save(MODEL_PATH)
@@ -126,9 +155,8 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: list[str
 
     self.logger.info(
         f"Round finished: total_reward={self.round_reward:.2f}, "
-        f"transitions_processed={self.round_transition_count}")
+        f"transitions_processed={self.round_transition_count}, "
+        f"replay={len(self.replay)}")
 
-    self.step_buffer = []
-    self.pending_transitions = []
     self.round_reward = 0.0
     self.round_transition_count = 0

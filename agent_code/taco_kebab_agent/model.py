@@ -88,6 +88,19 @@ class Model:
         q_values = np.array([phi @ self._beta[action] for action in self.actions], dtype=np.float32)
         return q_values
 
+    def predict_q_batch(self, features: np.ndarray) -> np.ndarray:
+        """Q-values for many states at once: (n, n_features) -> (n, n_actions).
+
+        Same arithmetic as predict_q, but the replay refit needs the maximum
+        over actions for every transition in the buffer on every refit, and
+        doing that one state at a time in Python is what would make refitting
+        too slow to use.
+        """
+        phi = np.hstack([np.asarray(features, dtype=np.float64),
+                         np.ones((len(features), 1))])
+        beta = np.stack([self._beta[action] for action in self.actions], axis=1)
+        return phi @ beta
+
     def update(self, batch: list[Transition]) -> None:
         by_action = {action: [] for action in self.actions}
         for transition in batch:
@@ -111,6 +124,26 @@ class Model:
             self._A[action] += phi.T @ phi
             self._b[action] += phi.T @ y
             self._beta[action] = np.linalg.solve(self._A[action], self._b[action])
+
+    def refit(self, batch: list[Transition]) -> None:
+        """Discard the accumulated statistics and fit from scratch on `batch`.
+
+        This is the alternative to the `forget` factor, and a better one. A
+        discount fades old experience uniformly with age, which cannot tell
+        "the navigation I learned in stage 1, still true" apart from "the value
+        estimate I made in stage 1, now wrong". Refitting from a replay buffer
+        keeps the experience and replaces only the estimates: the caller
+        recomputes every target against the current Q-function before calling
+        this, so nothing stale survives, while the transitions themselves are
+        still all there. That is fitted Q-iteration, and it is what PLAN.md
+        already specifies for Model B -- so using it here makes the two models
+        differ only in the function approximator.
+        """
+        dim = self.n_features + 1
+        for action in self.actions:
+            self._A[action] = self._penalty.copy()
+            self._b[action] = np.zeros(dim, dtype=np.float64)
+        self.update(batch)
 
     def save(self, path: str) -> None:
         if os.path.isabs(path):
