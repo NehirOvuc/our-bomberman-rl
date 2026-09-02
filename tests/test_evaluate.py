@@ -275,7 +275,6 @@ def test_scenario_choices_come_from_settings(monkeypatch):
 
 def _fake_git(monkeypatch, status_rc=0, status_out='', status_raises=None):
     """Stub subprocess.run: rev-parse always succeeds, git status is scripted."""
-    import subprocess as sp
     from types import SimpleNamespace
 
     def fake(cmd, **kw):
@@ -319,10 +318,49 @@ def test_a_nonzero_status_exit_also_says_unknown(monkeypatch):
 
 # --- the model guard must not fire on the framework's own baselines --------
 
-def test_framework_baselines_are_exempt_from_the_model_guard():
-    """`--lineup mirror --mirror-agent random_agent` is the only way to get a
-    three-random baseline. Demanding a trained model from an agent that has
-    none by design would make that comparison impossible to record."""
+def _guard_calls(monkeypatch, argv):
+    """Run main() far enough to see which agents the model guard was applied to.
+
+    Drives the real argument parsing and the real branch, then stops before any
+    match is played. Asserting on FRAMEWORK_AGENTS membership instead would pin
+    a property of the set rather than the guard that uses it -- deleting the
+    guard would leave such a test green.
+    """
+    calls = []
+    monkeypatch.setattr(evaluate, 'check_model_present', calls.append)
+
+    def stop(*args, **kwargs):
+        raise SystemExit('reached evaluate()')
+
+    monkeypatch.setattr(evaluate, 'evaluate', stop)
+    monkeypatch.setattr(sys, 'argv', ['evaluate.py', *argv])
+    with pytest.raises(SystemExit):
+        evaluate.main()
+    return calls
+
+
+def test_the_mirror_guard_skips_framework_baselines(monkeypatch):
+    """`--lineup mirror --mirror-agent random_agent` is the only way to record a
+    three-random baseline. Demanding a trained model from an agent that has none
+    by design would make that comparison impossible."""
+    calls = _guard_calls(monkeypatch,
+                         ['--lineup', 'mirror', '--mirror-agent', 'random_agent'])
+    assert calls == ['taco_kebab_agent']
+
+
+def test_the_mirror_guard_still_fires_on_one_of_our_own_versions(monkeypatch):
+    """The case the guard exists for: a fresh version directory has no model."""
+    calls = _guard_calls(monkeypatch,
+                         ['--lineup', 'mirror', '--mirror-agent', 'taco_kebab_v1'])
+    assert calls == ['taco_kebab_agent', 'taco_kebab_v1']
+
+
+def test_no_log_disables_the_guard_entirely(monkeypatch):
+    """--no-log is how the untrained performance floor in the report was made."""
+    assert _guard_calls(monkeypatch, ['--no-log']) == []
+
+
+def test_the_framework_set_covers_every_shipped_agent():
+    assert 'taco_kebab_agent' not in FRAMEWORK_AGENTS
     for name in ('random_agent', 'rule_based_agent', 'coin_collector_agent'):
         assert name in FRAMEWORK_AGENTS
-    assert 'taco_kebab_agent' not in FRAMEWORK_AGENTS
