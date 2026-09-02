@@ -35,6 +35,15 @@ N_STEP = int(os.environ.get('TACO_NSTEP', '1'))
 #: other's weights when they are trained back to back.
 MODEL_PATH = 'model_b.joblib' if MODEL_KIND == 'b' else 'model_a.npz'
 
+#: Seed for this agent's own exploration RNG. The framework's --seed flag
+#: deliberately does not cover agent randomness (only world generation --
+#: crate/coin placement), so two nominally identical training runs otherwise
+#: diverge in every epsilon-greedy decision from the first step. Left
+#: unparsed here -- a malformed TACO_SEED should fail loudly in setup() where
+#: it's used, not silently at import time. Unset by default, which preserves
+#: today's unseeded behaviour.
+AGENT_SEED = os.environ.get('TACO_SEED')
+
 
 def setup(self):
     """
@@ -54,6 +63,10 @@ def setup(self):
     self.logger.info(f"Using model {MODEL_KIND.upper()} with weights at "
                      f"{MODEL_PATH}, n_step={N_STEP}.")
     self.epsilon = 0.2  # exploration rate; tuned later via PLAN.md's hyperparameter grid search
+
+    # default_rng(None) seeds from OS entropy, preserving today's unseeded
+    # behaviour whenever TACO_SEED isn't set.
+    self.rng = np.random.default_rng(int(AGENT_SEED) if AGENT_SEED is not None else None)
 
     # Training continues from the saved weights when there are any. The
     # previous version returned here before the load whenever self.train was
@@ -87,8 +100,8 @@ def act(self, game_state: dict) -> str:
     features = state_to_features(game_state)
     q_values = self.model.predict_q(features)
 
-    if self.train and np.random.random() < self.epsilon:
-        action = np.random.choice(ACTIONS)
+    if self.train and self.rng.random() < self.epsilon:
+        action = self.rng.choice(ACTIONS)
         self.logger.debug(f"Exploring: chose random action {action}.")
         return action
 
