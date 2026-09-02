@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -151,3 +152,67 @@ def test_save_and_load_roundtrip():
     finally:
         if os.path.exists(path):
             os.remove(path)
+
+
+# --- forgetting factor -----------------------------------------------------
+
+def test_forget_defaults_to_keeping_everything():
+    # The old behaviour, kept as the default so nothing changes unasked.
+    assert Model().forget == 1.0
+
+
+def test_accumulated_statistics_grow_without_bound_when_nothing_is_forgotten():
+    # This is the bug, pinned. With forget = 1 the fit statistics grow with
+    # every batch, so the influence of each new batch shrinks as a run goes on.
+    m = Model(forget=1.0)
+    batch = [Transition(features=np.ones(FEATURE_DIM, dtype=np.float32),
+                        action='BOMB', reward=1.0, next_features=None, done=True)]
+    norms = []
+    for _ in range(50):
+        m.update(batch)
+        norms.append(np.linalg.norm(m._A['BOMB']))
+    assert norms[-1] > 5 * norms[0]
+
+
+def test_forgetting_keeps_the_statistics_bounded():
+    m = Model(forget=0.9)
+    batch = [Transition(features=np.ones(FEATURE_DIM, dtype=np.float32),
+                        action='BOMB', reward=1.0, next_features=None, done=True)]
+    norms = []
+    for _ in range(200):
+        m.update(batch)
+        norms.append(np.linalg.norm(m._A['BOMB']))
+    # Settles rather than growing: the last stretch barely moves.
+    assert abs(norms[-1] - norms[-50]) < 0.01 * norms[-1]
+
+
+def test_recent_targets_win_when_the_target_changes():
+    # The property the change exists for. Fit hard on one target, then feed a
+    # different one repeatedly; a forgetting model must follow the new target
+    # while a remembering one stays anchored to the old.
+    phi = np.ones(FEATURE_DIM, dtype=np.float32)
+    old = [Transition(features=phi, action='BOMB', reward=10.0,
+                      next_features=None, done=True)]
+    new = [Transition(features=phi, action='BOMB', reward=-10.0,
+                      next_features=None, done=True)]
+
+    remembering, forgetting = Model(forget=1.0), Model(forget=0.9)
+    for m in (remembering, forgetting):
+        for _ in range(100):
+            m.update(old)
+        for _ in range(100):
+            m.update(new)
+
+    q_remember = float(remembering.predict_q(phi)[ACTIONS.index('BOMB')])
+    q_forget = float(forgetting.predict_q(phi)[ACTIONS.index('BOMB')])
+    assert q_forget < q_remember
+    assert q_forget < 0        # the forgetting model has followed the new target
+
+
+def test_forget_survives_save_and_load(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    m = Model(forget=0.95)
+    m.save('m.npz')
+    loaded = Model()
+    loaded.load('m.npz')
+    assert loaded.forget == pytest.approx(0.95)

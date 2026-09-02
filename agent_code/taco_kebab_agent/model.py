@@ -42,11 +42,23 @@ class Model:
     """
 
     def __init__(self, ridge_lambda: float = 1.0, n_features: int = FEATURE_DIM,
-                 n_step: int = 1, gamma: float = 0.99):
+                 n_step: int = 1, gamma: float = 0.99, forget: float = 1.0):
         self.ridge_lambda = ridge_lambda
         self.n_features = n_features
         self.n_step = n_step
         self.gamma = gamma
+
+        # Discount applied to the accumulated statistics before each batch is
+        # folded in. forget = 1.0 keeps every transition for ever, which is
+        # correct for a fixed regression target but wrong for ours: the target
+        # is reward + gamma * max_q(next), computed with whatever beta was at
+        # the time, so a target generated in round 1 from a zero Q-function
+        # carries the same weight as one from round 4000. Measured effect:
+        # ||A_BOMB|| reached 43900 over a 4000-round curriculum, so the last
+        # stage -- the one that has to transfer to the tournament -- had the
+        # least capacity left to learn. forget < 1 gives an effective window of
+        # roughly 1 / (1 - forget) update calls.
+        self.forget = forget
 
         self.actions = ACTIONS
         dim = n_features + 1  # +1 for the bias term
@@ -56,6 +68,10 @@ class Model:
         # actions accumulate transitions at different rates under epsilon-greedy.
         penalty = ridge_lambda * np.eye(dim, dtype=np.float64)
         penalty[-1, -1] = 0.0
+        #: Kept so the ridge term can be topped back up after each decay --
+        #: without that it would decay away too and the fit lose its
+        #: regularisation exactly when the data is sparsest.
+        self._penalty = penalty
         self._A = {action: penalty.copy() for action in self.actions}
         self._b = {action: np.zeros(dim, dtype=np.float64) for action in self.actions}
         self._beta = {action: np.zeros(dim, dtype=np.float64) for action in self.actions}
@@ -84,6 +100,14 @@ class Model:
             phi = np.stack([self._augment(t.features) for t in transitions])
             y = np.array([t.reward for t in transitions], dtype=np.float64)
 
+            if self.forget < 1.0:
+                # Decay what we already know, then restore the ridge term so it
+                # does not decay with it. With no further data the statistics
+                # settle back to the penalty rather than to zero.
+                self._A[action] *= self.forget
+                self._b[action] *= self.forget
+                self._A[action] += (1.0 - self.forget) * self._penalty
+
             self._A[action] += phi.T @ phi
             self._b[action] += phi.T @ y
             self._beta[action] = np.linalg.solve(self._A[action], self._b[action])
@@ -104,6 +128,7 @@ class Model:
             n_features=self.n_features,
             n_step=self.n_step,
             gamma=self.gamma,
+            forget=self.forget,
             **arrays,
         )
 
@@ -117,6 +142,8 @@ class Model:
         self.n_features = int(data['n_features'])
         self.n_step = int(data['n_step'])
         self.gamma = float(data['gamma'])
+        # Older files predate the forgetting factor; they mean forget = 1.0.
+        self.forget = float(data['forget']) if 'forget' in data else 1.0
 
         for action in self.actions:
             self._A[action] = data[f'A_{action}']
