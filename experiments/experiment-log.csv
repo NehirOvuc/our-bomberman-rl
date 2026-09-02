@@ -1,0 +1,5 @@
+date,commit,agent,version,scenario,lineup,seeds,rounds,score_mean,score_ci,coins,kills,suicides,bombs,crates,invalid_rate,steps_survived,seeds_won,note
+2026-09-02,9adc909,taco_kebab_agent,v1,classic,tournament,900-909,100,0.779,0.038,0.779,0.0,0.0,0.0,0.0,0.019,226.5,0/10,contract table only; 2000 rounds seed 1
+2026-09-02,9adc909,taco_kebab_agent,v1,classic,solo,900-909,100,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,400.0,,contract table only; 2000 rounds seed 1
+2026-09-02,9adc909,taco_kebab_agent,v2,classic,tournament,900-909,100,0.764,0.058,0.764,0.0,0.0,0.0,0.0,0.0161,235.0,0/10,+ 4 PLAN.md bomb/danger events; 2000 rounds seed 1
+2026-09-02,9adc909,taco_kebab_agent,v2,classic,solo,900-909,100,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,400.0,,+ 4 PLAN.md bomb/danger events; 2000 rounds seed 1
