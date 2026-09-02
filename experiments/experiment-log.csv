@@ -6,3 +6,4 @@ date,commit,agent,version,scenario,lineup,seeds,rounds,score_mean,score_ci,coins
 2026-09-02,57ce8c9,taco_kebab_agent,v2-curriculum,classic,tournament,900-909,100,0.899,0.078,0.899,0.0,0.0,0.0,0.0,0.0167,228.9,0/10,"curriculum coin-heaven->crate-easy->crate-mid->loot-crate->classic, 4000 rounds total"
 2026-09-02,57ce8c9,taco_kebab_agent,v2-curriculum,classic,solo,900-909,100,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,400.0,,"curriculum, 4000 rounds total"
 2026-09-02,7821ba5,taco_kebab_agent,v3-forgetting,classic,tournament,900-909,100,0.176,0.026,0.176,0.0,0.003,0.11,0.02,0.089,219.6,0/10,"forget=0.99 + curriculum coin-heaven->crate-easy->crate-mid->loot-crate->classic, 4000 rounds total"
+2026-09-02,016f1ad,taco_kebab_agent,v3-forgetting,classic,solo,900-909,100,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0328,400.0,,"forget=0.99 + curriculum, 4000 rounds total"
