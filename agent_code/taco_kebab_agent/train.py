@@ -13,6 +13,7 @@ the windowing logic in game_events_occurred/end_of_round already handles
 it, no rewrite needed.
 """
 
+import os
 from collections import deque
 
 import numpy as np
@@ -40,6 +41,23 @@ REPLAY_SIZE = 250000
 #: against the current Q-function and rebuilds the fit from scratch, so this
 #: trades compute for freshness. 25 is a starting value, not a tuned one.
 REFIT_EVERY = 25
+
+#: Where the replay buffer is parked between curriculum stages.
+#:
+#: Each stage of the curriculum is a separate `main.py` process, and
+#: `setup_training` builds a fresh deque, so until this existed the buffer was
+#: silently emptied at every stage boundary. The model carried over; the
+#: experience did not. The first refit of each new stage therefore rebuilt the
+#: whole Q-function from ~25 rounds of the new scenario and discarded
+#: everything learned in the previous ones -- catastrophic forgetting, four
+#: times per run, caused by the process boundary rather than by anything in the
+#: algorithm. Sizing the deque to 250k did not help, because the deque never
+#: got the chance to fill.
+#:
+#: Training-time only: nothing reads this at tournament time, and it is
+#: gitignored. Delete it to start a curriculum from clean experience, which is
+#: what TACO_FRESH does automatically.
+REPLAY_PATH = 'replay_buffer.npz'
 
 
 def _n_step_return(rewards, gamma, bootstrap=None):
@@ -71,6 +89,79 @@ def setup_training(self):
     self.rounds_since_refit = 0
     self.round_reward = 0.0
     self.round_transition_count = 0
+
+    # Carry the previous stage's experience in, unless we were told to start
+    # clean. TACO_FRESH already means "ignore the saved model"; it has to mean
+    # "ignore the saved buffer" too, or a from-zero baseline would silently
+    # train on the last run's transitions.
+    if os.environ.get('TACO_FRESH') == '1':
+        if os.path.isfile(REPLAY_PATH):
+            os.remove(REPLAY_PATH)
+        self.logger.info("TACO_FRESH set: starting with an empty replay buffer.")
+        return
+
+    if os.path.isfile(REPLAY_PATH):
+        _load_replay(self)
+
+
+def _load_replay(self):
+    """Restore the buffer written by the previous stage.
+
+    Stored as four parallel arrays rather than a list of tuples: `allow_pickle`
+    is off, so a corrupt or hand-edited file fails to load instead of executing
+    whatever is in it. `next_features` is a dense array plus a validity mask,
+    because a terminal step stores None and npz has no way to represent a
+    ragged column.
+    """
+    try:
+        data = np.load(REPLAY_PATH, allow_pickle=False)
+        features = data['features']
+        actions = data['actions']
+        rewards = data['rewards']
+        next_features = data['next_features']
+        has_next = data['has_next']
+    except (OSError, ValueError, KeyError) as err:
+        # A truncated file from an interrupted run must not abort training --
+        # an empty buffer is recoverable, a crash three stages in is not.
+        self.logger.error(f"Could not read {REPLAY_PATH}, starting empty: {err}")
+        return
+
+    for i in range(len(actions)):
+        self.replay.append((
+            features[i],
+            str(actions[i]),
+            float(rewards[i]),
+            next_features[i] if has_next[i] else None,
+            not has_next[i],
+        ))
+    self.logger.info(f"Restored {len(self.replay)} transitions from {REPLAY_PATH}.")
+
+
+def _save_replay(self):
+    """Park the buffer for the next stage. Called only when the model is saved."""
+    rows = list(self.replay)
+    if not rows:
+        return
+
+    has_next = np.array([r[3] is not None for r in rows])
+    # Terminal rows still need a slot in the dense array; zeros are never read
+    # because has_next gates them on the way back in.
+    next_features = np.zeros((len(rows), len(rows[0][0])), dtype=np.float32)
+    for i, row in enumerate(rows):
+        if row[3] is not None:
+            next_features[i] = row[3]
+
+    try:
+        np.savez_compressed(
+            REPLAY_PATH,
+            features=np.stack([r[0] for r in rows]).astype(np.float32),
+            actions=np.array([r[1] for r in rows]),
+            rewards=np.array([r[2] for r in rows], dtype=np.float32),
+            next_features=next_features,
+            has_next=has_next,
+        )
+    except OSError as err:
+        self.logger.error(f"Failed to save replay buffer to {REPLAY_PATH}: {err}")
 
 
 def _refit_from_replay(self):
@@ -160,6 +251,9 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: list[str
             self.model.save(MODEL_PATH)
         except Exception as err:
             self.logger.error(f"Failed to save model to {MODEL_PATH}: {err}")
+        # The buffer is only useful alongside the model it produced, so the two
+        # are written together and stay in step.
+        _save_replay(self)
 
     self.logger.info(
         f"Round finished: total_reward={self.round_reward:.2f}, "
