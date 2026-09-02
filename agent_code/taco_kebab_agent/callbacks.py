@@ -29,13 +29,23 @@ def setup(self):
     self.model = Model()
     self.epsilon = 0.2  # exploration rate; tuned later via PLAN.md's hyperparameter grid search
 
-    if self.train:
-        self.logger.info("Training mode: starting from a fresh, untrained model.")
+    # Training continues from the saved weights when there are any. The
+    # previous version returned here before the load whenever self.train was
+    # set, so every training run started from zero -- which made the staged
+    # curriculum in training_scenarios.py impossible to run at all: there was
+    # no way to train on coin-heaven and carry the weights into crate-easy.
+    #
+    # Set TACO_FRESH=1 in the environment to start from scratch on purpose,
+    # which is what a from-zero baseline needs.
+    if os.environ.get('TACO_FRESH') == '1':
+        self.logger.info("TACO_FRESH set: starting from a fresh, untrained model.")
         return
 
     if os.path.isfile(MODEL_PATH):
-        self.logger.info(f"Loading trained model from {MODEL_PATH}.")
+        self.logger.info(f"Loading model from {MODEL_PATH}.")
         self.model.load(MODEL_PATH)
+    elif self.train:
+        self.logger.info("Training mode: no saved model yet, starting fresh.")
     else:
         self.logger.error(f"No trained model found at {MODEL_PATH}; playing with an untrained model.")
 
