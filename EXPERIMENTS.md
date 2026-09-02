@@ -33,12 +33,22 @@ version to score anything at all alone.
 | v3 | + model forgets old data | 0.176 | 0.11 | 0.02 | much worse |
 | v4 | + replay buffer | 0.211 | 0.01 | 0.00 | **measured wrong, see below** |
 | v5 | v4 with the buffer bug fixed | 0.472 | 0.00 | 0.00 | worse than v2c |
-| v7 | **decision forest instead of a line** | **1.260** | **7.68** | **3.38** | **it bombs** |
+| v7 | **decision forest instead of a line** | 1.260 | 7.68 | 3.38 | **it bombs** |
+| v8 | **+ 5-step reward window (Nehir)** | **2.065** | 6.96 | **13.52** | **biggest jump** |
 
 Alone on the board: v1–v5 scored **0.000**. v7 scores **0.155**.
 
-*(v6 was v7 with a buffer bug that flattered it to 1.902 — excluded. v8, the
-forest with a longer reward window, is running now.)*
+*(v6 was v7 with a buffer bug that flattered it to 1.902 — excluded.)*
+
+**v8 is the biggest single result and it was Nehir's.** A bomb goes off six
+steps after you drop it (`BOMB_TIMER` 4 + `EXPLOSION_TIMER` 2), but the model
+was only ever shown the very next step — so dropping a bomb looked like it
+achieved nothing. Widening the window to five steps: **four times the crates
+from fewer bombs**, and the invalid-move rate more than halved on its own with
+no change to the reward table. It also beat the gain from switching to the
+forest (+0.805 against +0.788), which is why "the model type was the binding
+constraint" has been withdrawn from the report. `train.py` turned out never to
+have read `n_step` on the replay path, so every arm before v8 ran at 1.
 
 ---
 
