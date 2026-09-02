@@ -57,13 +57,22 @@ def state_to_features_stub(game_state: dict) -> np.ndarray:
 **Value chosen:**
 ```python
 Transition = namedtuple('Transition', [
-    'features',       # np.ndarray (34,)
+    'features',       # np.ndarray (33,)
     'action',         # str, one of ACTIONS
     'reward',         # float — output of reward_from_events
-    'next_features',  # np.ndarray (34,) or None if terminal
+    'next_features',  # np.ndarray (33,) or None if terminal
     'done',           # bool
 ])
 ```
+
+**Note (added after the replay-buffer refit landed):** `train.py` calls
+`Model.refit(batch)` — not `update(batch)` — for both models during training.
+`refit` discards accumulated state and fits from scratch on the full batch it
+is given; `update(batch)` remains as an internal primitive — Model A's
+`refit()` resets its accumulated normal-equation statistics and then calls
+its own `update(batch)` once to (re)build them from the given batch. Model
+B's `update()` intentionally raises `NotImplementedError`, since a
+regression forest has no incremental fit — only `refit` is meaningful for it.
 
 ---
 
@@ -136,4 +145,4 @@ def setup_training(self) -> None: ...
 def game_events_occurred(self, old_game_state, self_action, new_game_state, events) -> None: ...
 def end_of_round(self, last_game_state, last_action, events) -> None: ...
 ```
-`act()` calls `state_to_features` → `Model.predict_q` → picks an action. `game_events_occurred` calls `reward_from_events` → builds a `Transition` → periodically calls `Model.update`.
+`act()` calls `state_to_features` → `Model.predict_q` → picks an action. `game_events_occurred` calls `reward_from_events` → appends to the replay buffer; `end_of_round` periodically recomputes n-step TD targets over the whole buffer and calls `Model.refit` (see the note under section 4).

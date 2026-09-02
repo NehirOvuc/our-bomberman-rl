@@ -10,14 +10,30 @@ import os
 import numpy as np
 
 from .model import ACTIONS, Model
+from .model_b import ModelB
 
 from .features import state_to_features
+
+#: Which approximator to build. Set TACO_MODEL=b to run the forest, mirroring
+#: the TACO_FRESH switch below. An environment variable rather than two agent
+#: directories on purpose: it is the only way to guarantee the A and B arms
+#: share one act(), one feature call and one epsilon, which is what makes
+#: section 6 a controlled comparison instead of two separate agents.
+MODEL_KIND = os.environ.get('TACO_MODEL', 'a').lower()
+
+#: TD window length. 1 is the historical default. BOMB_TIMER (4) plus
+#: EXPLOSION_TIMER (2) is 6, so a bomb resolves six steps after it is dropped
+#: while the drop step itself pays nothing -- at n_step=1 the BOMB regression
+#: never sees its own consequence directly. Set TACO_NSTEP=5 to span the fuse.
+N_STEP = int(os.environ.get('TACO_NSTEP', '1'))
 
 #: Relative path per interface_contract.md section 6 -- absolute paths break
 #: the Docker submission test. Bare filename because SequentialAgentBackend
 #: (agents.py) chdirs into this agent's own directory before every callback,
 #: so this is already relative to agent_code/taco_kebab_agent/.
-MODEL_PATH = 'model_a.npz'
+#: Model A saves .npz, Model B .joblib, so the two arms cannot overwrite each
+#: other's weights when they are trained back to back.
+MODEL_PATH = 'model_b.joblib' if MODEL_KIND == 'b' else 'model_a.npz'
 
 
 def setup(self):
@@ -26,16 +42,36 @@ def setup(self):
 
     :param self: This object is passed to all callbacks and you can set arbitrary values.
     """
-    self.model = Model()
+    # forget stays at its default of 1.0 on this branch: train.py refits from
+    # a replay buffer instead, which throws the old statistics away wholesale
+    # rather than fading them, so a discount on top would be a second
+    # mechanism doing the same job less well.
+    #
+    # Model B is the same pipeline with the linear Q swapped for a forest.
+    # Nothing else differs -- same features, same rewards, same epsilon.
+    self.model = (ModelB(n_step=N_STEP) if MODEL_KIND == 'b'
+                  else Model(n_step=N_STEP))
+    self.logger.info(f"Using model {MODEL_KIND.upper()} with weights at "
+                     f"{MODEL_PATH}, n_step={N_STEP}.")
     self.epsilon = 0.2  # exploration rate; tuned later via PLAN.md's hyperparameter grid search
 
-    if self.train:
-        self.logger.info("Training mode: starting from a fresh, untrained model.")
+    # Training continues from the saved weights when there are any. The
+    # previous version returned here before the load whenever self.train was
+    # set, so every training run started from zero -- which made the staged
+    # curriculum in training_scenarios.py impossible to run at all: there was
+    # no way to train on coin-heaven and carry the weights into crate-easy.
+    #
+    # Set TACO_FRESH=1 in the environment to start from scratch on purpose,
+    # which is what a from-zero baseline needs.
+    if os.environ.get('TACO_FRESH') == '1':
+        self.logger.info("TACO_FRESH set: starting from a fresh, untrained model.")
         return
 
     if os.path.isfile(MODEL_PATH):
-        self.logger.info(f"Loading trained model from {MODEL_PATH}.")
+        self.logger.info(f"Loading model from {MODEL_PATH}.")
         self.model.load(MODEL_PATH)
+    elif self.train:
+        self.logger.info("Training mode: no saved model yet, starting fresh.")
     else:
         self.logger.error(f"No trained model found at {MODEL_PATH}; playing with an untrained model.")
 

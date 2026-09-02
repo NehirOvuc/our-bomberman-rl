@@ -3,10 +3,13 @@
 Legend: # wall  . free  c crate  o coin  a us  e opponent  B bomb  x burning
 """
 
+import pytest
+
 import events as e
 from agent_code.taco_kebab_agent.rewards import (
     reward_from_events, derive_events, REWARDS,
     MOVED_TOWARDS_COIN, MOVED_AWAY_FROM_COIN, ESCAPED_BLAST, STAYED_IN_BLAST,
+    BOMB_NEXT_TO_CRATE, DROPPED_USELESS_BOMB, TRAPPED_SELF, WAITED_IN_DANGER,
 )
 from helpers import make_state
 
@@ -169,3 +172,121 @@ def test_ordinary_steps_stay_inside_the_bound():
     for event in REWARDS:
         assert -5.0 <= reward_from_events([event], None, None) <= 5.0
     assert -5.0 <= reward_from_events([e.KILLED_SELF, e.GOT_KILLED], None, None)
+
+
+# --- v2: judging the bomb we just dropped ---------------------------------
+# These four read the state we acted in, so they are tested with
+# new_game_state=None. That is also the terminal step train.py passes, so
+# each of these doubles as a check that the last step of a round is shaped.
+
+def test_bomb_that_will_break_a_crate_and_can_be_escaped():
+    # The crate is below us and in range; the corridor to the right is long
+    # enough to get clear of a three-tile blast.
+    state = make_state("""
+##########
+#a.......#
+#c########
+##########
+""")
+    assert derive_events([e.BOMB_DROPPED], state, None) == [BOMB_NEXT_TO_CRATE]
+
+
+def test_bomb_that_will_catch_an_opponent_counts_as_useful():
+    # Nothing to destroy, but an opponent is standing in the blast.
+    state = make_state("""
+##########
+#a..e....#
+##########
+""")
+    assert derive_events([e.BOMB_DROPPED], state, None) == [BOMB_NEXT_TO_CRATE]
+
+
+def test_bomb_in_the_open_with_nothing_to_hit_is_a_wasted_turn():
+    state = make_state("""
+##########
+#a.......#
+##########
+""")
+    assert derive_events([e.BOMB_DROPPED], state, None) == [DROPPED_USELESS_BOMB]
+
+
+def test_bomb_in_a_dead_end_is_trapping_ourselves():
+    # The whole corridor is within three tiles, so there is nowhere to run.
+    state = make_state("""
+#####
+#a..#
+#####
+""")
+    assert derive_events([e.BOMB_DROPPED], state, None) == [TRAPPED_SELF]
+
+
+def test_no_escape_beats_a_crate():
+    # A crate in range would otherwise pay +0.3. Dying is not worth a crate,
+    # so TRAPPED_SELF wins and it is the only event.
+    state = make_state("""
+#####
+#ac.#
+#####
+""")
+    assert derive_events([e.BOMB_DROPPED], state, None) == [TRAPPED_SELF]
+
+
+def test_no_bomb_event_without_a_bomb():
+    state = make_state("""
+##########
+#a.......#
+#c########
+##########
+""")
+    assert derive_events([], state, None) == []
+
+
+# --- v2: waiting while a bomb is coming ------------------------------------
+
+def test_waiting_inside_a_blast_line_is_penalised():
+    state = make_state("""
+########
+#B..a..#
+########
+""", bomb_timers=[2])
+    assert derive_events([e.WAITED], state, None) == [WAITED_IN_DANGER]
+
+
+def test_waiting_somewhere_safe_is_not():
+    # Same board, but we are five tiles from the bomb, outside its three-tile
+    # reach. Waiting there costs only the plain WAITED penalty.
+    state = make_state("""
+#########
+#B....a.#
+#########
+""", bomb_timers=[2])
+    assert derive_events([e.WAITED], state, None) == []
+
+
+# --- v2: the arithmetic the change was made for ----------------------------
+
+def test_a_good_bomb_now_pays_on_the_step_it_is_dropped():
+    # The whole point of v2. In v1 this step was worth 0.0 and the only
+    # positive arrived four steps later, if we survived to collect it.
+    state = make_state("""
+##########
+#a.......#
+#c########
+##########
+""")
+    assert reward_from_events([e.BOMB_DROPPED], state, None) == pytest.approx(0.3)
+
+
+def test_trapping_ourselves_is_charged_before_the_death_arrives():
+    state = make_state("""
+#####
+#a..#
+#####
+""")
+    assert reward_from_events([e.BOMB_DROPPED], state, None) == pytest.approx(-1.0)
+
+
+def test_the_new_events_stay_inside_the_contract_bound():
+    for event in (BOMB_NEXT_TO_CRATE, DROPPED_USELESS_BOMB, TRAPPED_SELF,
+                  WAITED_IN_DANGER):
+        assert -5.0 <= REWARDS[event] <= 5.0
