@@ -145,13 +145,21 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: list[str
     self.round_transition_count += 1
 
     self.rounds_since_refit += 1
-    if self.rounds_since_refit >= REFIT_EVERY:
+    refitted = self.rounds_since_refit >= REFIT_EVERY
+    if refitted:
         _refit_from_replay(self)
 
-    try:
-        self.model.save(MODEL_PATH)
-    except Exception as err:
-        self.logger.error(f"Failed to save model to {MODEL_PATH}: {err}")
+    # Save only when the model actually changed. On this branch neither model
+    # learns between refits -- game_events_occurred just fills the buffer --
+    # so a save on every other round writes an identical file. Free for Model
+    # A's 9 KB .npz, not free for Model B: a full-size forest is 10.7 MB and
+    # takes 0.23 s to compress, which is 16 minutes of pure I/O over a
+    # 4000-round curriculum, longer than the training itself.
+    if refitted:
+        try:
+            self.model.save(MODEL_PATH)
+        except Exception as err:
+            self.logger.error(f"Failed to save model to {MODEL_PATH}: {err}")
 
     self.logger.info(
         f"Round finished: total_reward={self.round_reward:.2f}, "

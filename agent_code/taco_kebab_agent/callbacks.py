@@ -10,14 +10,24 @@ import os
 import numpy as np
 
 from .model import ACTIONS, Model
+from .model_b import ModelB
 
 from .features import state_to_features
+
+#: Which approximator to build. Set TACO_MODEL=b to run the forest, mirroring
+#: the TACO_FRESH switch below. An environment variable rather than two agent
+#: directories on purpose: it is the only way to guarantee the A and B arms
+#: share one act(), one feature call and one epsilon, which is what makes
+#: section 6 a controlled comparison instead of two separate agents.
+MODEL_KIND = os.environ.get('TACO_MODEL', 'a').lower()
 
 #: Relative path per interface_contract.md section 6 -- absolute paths break
 #: the Docker submission test. Bare filename because SequentialAgentBackend
 #: (agents.py) chdirs into this agent's own directory before every callback,
 #: so this is already relative to agent_code/taco_kebab_agent/.
-MODEL_PATH = 'model_a.npz'
+#: Model A saves .npz, Model B .joblib, so the two arms cannot overwrite each
+#: other's weights when they are trained back to back.
+MODEL_PATH = 'model_b.joblib' if MODEL_KIND == 'b' else 'model_a.npz'
 
 
 def setup(self):
@@ -30,7 +40,11 @@ def setup(self):
     # a replay buffer instead, which throws the old statistics away wholesale
     # rather than fading them, so a discount on top would be a second
     # mechanism doing the same job less well.
-    self.model = Model()
+    #
+    # Model B is the same pipeline with the linear Q swapped for a forest.
+    # Nothing else differs -- same features, same rewards, same epsilon.
+    self.model = ModelB() if MODEL_KIND == 'b' else Model()
+    self.logger.info(f"Using model {MODEL_KIND.upper()} with weights at {MODEL_PATH}.")
     self.epsilon = 0.2  # exploration rate; tuned later via PLAN.md's hyperparameter grid search
 
     # Training continues from the saved weights when there are any. The
