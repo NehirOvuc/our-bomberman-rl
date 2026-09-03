@@ -82,8 +82,9 @@ have read `n_step` on the replay path, so every arm before v8 ran at 1.
    Nehir has since shown that adding the two features multiplied together fixes
    it — so the gap was in the features, not the model type. **That comparison is
    still open.**
-3. **Ege told Daniel to build the forgetting/replay mechanism before the results
-   were in.** The results say don't. Withdrawn.
+3. **We concluded the fix was to make the model forget old data — before the
+   results were in.** Both versions of that were then measured and both made the
+   agent clearly worse. Withdrawn.
 
 ---
 
