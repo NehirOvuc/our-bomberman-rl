@@ -105,6 +105,11 @@ def act(self, game_state: dict) -> str:
         self.logger.debug(f"Exploring: chose random action {action}.")
         return action
 
-    action = ACTIONS[int(np.argmax(q_values))]
+    # np.argmax always resolves a tie to its first index, which is UP -- and
+    # every action is tied at 0.0 before the model has seen any data, so an
+    # untrained agent used to open every round by walking into a wall. Break
+    # ties uniformly instead, over all actions sharing the max, not just two.
+    best = np.flatnonzero(q_values == q_values.max())
+    action = ACTIONS[self.rng.choice(best)]
     self.logger.debug(f"Exploiting: chose action {action} from Q-values {q_values}.")
     return action

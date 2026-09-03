@@ -1,4 +1,5 @@
-"""Tests for callbacks.py's agent-owned exploration RNG (TACO_SEED).
+"""Tests for callbacks.py's agent-owned exploration RNG (TACO_SEED) and its
+Q-value tie-breaking in act().
 
 The framework's own --seed flag deliberately does not cover agent
 randomness (only world generation -- crate/coin placement; see the project
@@ -7,6 +8,11 @@ until this: two nominally identical training runs diverged in every
 exploration decision from the first step, with no way to reproduce a run.
 TACO_SEED gives each agent its own `np.random.default_rng`, following the
 same env-var convention as TACO_MODEL / TACO_NSTEP / TACO_FRESH.
+
+The same rng is also reused to break ties in the exploitation branch:
+np.argmax always resolves a tie to its first index (UP), so an untrained
+model -- whose predict_q returns all zeros for every action -- used to open
+every round by walking into a wall.
 
 Run from the repository root:  python -m pytest tests
 """
@@ -103,3 +109,58 @@ def test_malformed_seed_fails_at_setup_not_at_import(monkeypatch):
     monkeypatch.setattr(callbacks, 'AGENT_SEED', 'not-an-int')
     with pytest.raises(ValueError):
         callbacks.setup(_agent())
+
+
+class _FixedQModel:
+    """Stub model whose predict_q always returns the same fixed array,
+    regardless of the state it's given -- isolates act()'s tie-breaking from
+    feature extraction and from any particular model's learned weights.
+    """
+
+    def __init__(self, q_values):
+        self.q_values = np.asarray(q_values, dtype=np.float32)
+
+    def predict_q(self, features):
+        return self.q_values
+
+
+def _agent_with_fixed_q(q_values, train=False, seed=0):
+    return SimpleNamespace(
+        train=train,
+        logger=logging.getLogger('test'),
+        model=_FixedQModel(q_values),
+        epsilon=0.2,
+        rng=np.random.default_rng(seed),
+    )
+
+
+def test_tie_breaking_is_uniform_over_all_tied_actions():
+    """A genuine tie among every action (all-zero Q-values, exactly what an
+    untrained model produces) must not always resolve to the same action.
+    Also run with train=False: the fix applies unconditionally, since
+    self.rng already exists whether or not the agent is training.
+    """
+    agent = _agent_with_fixed_q([0.0] * 6, train=False)
+    picks = {callbacks.act(agent, STATE) for _ in range(200)}
+    assert len(picks) > 1
+
+
+def test_tie_breaking_only_chooses_among_tied_actions():
+    """Two actions share the max; the tie-break must never pick a third, and
+    -- over enough draws -- must actually pick both of them, not just one.
+    """
+    q = [5.0, 5.0, 1.0, 1.0, 1.0, 1.0]  # UP and DOWN tied for the max
+    agent = _agent_with_fixed_q(q, train=False)
+    picks = {callbacks.act(agent, STATE) for _ in range(200)}
+    assert picks == {'UP', 'DOWN'}
+
+
+def test_unique_maximum_always_wins_unchanged():
+    """No tie: the same action is returned every time, exactly like the old
+    `ACTIONS[np.argmax(q_values)]` behaviour -- the tie-break is a no-op
+    when `best` has a single entry.
+    """
+    q = [1.0, 2.0, 5.0, 0.0, -1.0, 3.0]  # LEFT (index 2) is the unique max
+    agent = _agent_with_fixed_q(q, train=False)
+    actions = {callbacks.act(agent, STATE) for _ in range(50)}
+    assert actions == {'LEFT'}
