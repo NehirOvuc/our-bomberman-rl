@@ -109,11 +109,16 @@ LOG_FIELDS = ['date', 'commit', 'agent', 'version', 'scenario', 'lineup',
 def git_commit():
     """Short hash of the code that produced a result, or '?' outside a repo.
 
-    Suffixed with '-dirty' when the working tree has uncommitted changes.
-    Without it a row can name a commit that is not what produced it, which is
-    worse than naming nothing: the log exists so a number can be traced back
-    to the code behind it, and a hash that is confidently wrong breaks exactly
-    that.
+    Suffixed with '-dirty' when there are uncommitted changes **outside
+    `experiments/`**, and with '-unknown' when we could not determine that.
+    The exclusion is there because this tool writes into `experiments/`: the
+    log file is tracked, so the first logged run dirties the tree and every
+    row after it would read '-dirty' on an otherwise untouched checkout. The
+    suffix has to mean "the code changed", not "the tool ran twice".
+
+    '-unknown' is not decoration. A silent bare hash would claim the tree was
+    clean when we simply failed to look, and a hash that is confidently wrong
+    is worse than one that admits it does not know.
     """
     try:
         out = subprocess.run(['git', 'rev-parse', '--short', 'HEAD'],
@@ -125,21 +130,30 @@ def git_commit():
     if commit == '?':
         return commit
 
-    # A separate try: if the dirty probe fails we still know the hash, and
-    # returning '?' instead would be strictly worse than an unknown tree state.
+    # A pathspec rather than filtering porcelain by hand: porcelain quotes
+    # paths containing spaces ('?? "experiments/a b.csv"') and writes renames
+    # as 'R  ORIG -> PATH', so prefix-matching the line both misses excluded
+    # files and — worse — hides a real code change renamed out of experiments/.
     try:
-        dirty = subprocess.run(['git', 'status', '--porcelain'],
-                               cwd=ROOT, capture_output=True, text=True, timeout=10)
+        dirty = subprocess.run(
+            ['git', 'status', '--porcelain', '--', '.', ':(exclude)experiments'],
+            cwd=ROOT, capture_output=True, text=True, timeout=10)
+        if dirty.returncode != 0:
+            return f'{commit}-unknown'
     except (OSError, subprocess.SubprocessError):
-        return commit
+        return f'{commit}-unknown'
 
-    # experiments/ is excluded because this tool writes into it: the log file
-    # is tracked, so the first logged run dirties the tree and every row after
-    # it would read '-dirty' on an otherwise untouched checkout. The suffix has
-    # to mean "the code changed", not "the tool ran twice".
-    changed = [line for line in dirty.stdout.splitlines()
-               if line.strip() and not line[3:].startswith('experiments/')]
-    return f'{commit}-dirty' if changed else commit
+    return f'{commit}-dirty' if dirty.stdout.strip() else commit
+
+
+#: Agents shipped with the framework. They have no trained model and never
+#: will, so the model guard below must not be applied to them -- doing so makes
+#: `--lineup mirror --mirror-agent random_agent` impossible, which is the only
+#: way to measure a three-random baseline.
+FRAMEWORK_AGENTS = frozenset({
+    'random_agent', 'rule_based_agent', 'peaceful_agent',
+    'coin_collector_agent', 'tpl_agent', 'user_agent', 'fail_agent',
+})
 
 
 #: Model files an agent may carry: Model A saves .npz, Model B .joblib
@@ -340,7 +354,12 @@ def evaluate(agent, opponents, lineup, scenario, seeds, rounds, keep_stats=None,
             # run dies in environment.py's end() with PermissionError -- after
             # playing every round correctly. Only the default path was
             # affected; --keep-stats writes an ordinary file and always worked.
-            with tempfile.TemporaryDirectory(prefix='evaluate_') as work:
+            # ignore_cleanup_errors: TemporaryDirectory raises OSError if
+            # removal fails, and this is the one path whose whole reason for
+            # existing is Windows file-locking. A cleanup failure after the
+            # last seed would otherwise throw away a completed run.
+            with tempfile.TemporaryDirectory(prefix='evaluate_',
+                                             ignore_cleanup_errors=True) as work:
                 raw = run_match(agent, opponents, scenario, seed, rounds,
                                 Path(work) / 'stats.json')
         rows.append(per_round(raw, agent, rounds))
@@ -476,12 +495,15 @@ def main():
         # the escape hatch for deliberately measuring an untrained agent, which
         # is how the performance floor in the report was produced.
         check_model_present(args.agent)
-        if lineup == 'mirror':
-            # The opponent needs it too, and needs it most: a fresh version
-            # directory has no model file (they are gitignored), so three
-            # untrained copies would walk UP for four hundred steps, lose to
-            # anything, and the row would read as evidence that our agent beat
-            # the previous version.
+        if lineup == 'mirror' and args.mirror_agent not in FRAMEWORK_AGENTS:
+            # A fresh version directory of our own agent has no model file
+            # (they are gitignored), so three untrained copies would walk UP
+            # for four hundred steps, lose to anything, and the row would read
+            # as evidence that this version beat the last one.
+            #
+            # Framework baselines are exempt: they have no model by design, and
+            # requiring one would make a three-random or three-rule_based
+            # line-up impossible to record at all.
             check_model_present(args.mirror_agent)
 
     print(f'evaluating {args.agent} vs {opponents or "nobody"} on {args.scenario}, '

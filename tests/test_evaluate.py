@@ -14,9 +14,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'tools'))
 
 import evaluate  # noqa: E402
-from evaluate import (append_log, build_parser,  # noqa: E402
-                      check_agent_loaded_model, check_model_present, our_key,
-                      per_round, summarise)
+from evaluate import (FRAMEWORK_AGENTS, append_log, build_parser,  # noqa: E402
+                      check_agent_loaded_model, check_model_present,
+                      git_commit, our_key, per_round, summarise)
 
 
 def _stats(ours, **others):
@@ -269,3 +269,98 @@ def test_scenario_choices_come_from_settings(monkeypatch):
     assert sorted(action.choices) == sorted(settings.SCENARIOS)
     # argparse never validates a default against choices, so pin it here.
     assert action.default in action.choices
+
+
+# --- the commit stamp must not claim a clean tree it never checked ---------
+
+def _fake_git(monkeypatch, status_rc=0, status_out='', status_raises=None):
+    """Stub subprocess.run: rev-parse always succeeds, git status is scripted."""
+    from types import SimpleNamespace
+
+    def fake(cmd, **kw):
+        if 'rev-parse' in cmd:
+            return SimpleNamespace(returncode=0, stdout='9adc909\n')
+        if status_raises:
+            raise status_raises
+        return SimpleNamespace(returncode=status_rc, stdout=status_out)
+
+    monkeypatch.setattr(evaluate.subprocess, 'run', fake)
+
+
+def test_clean_tree_records_a_bare_hash(monkeypatch):
+    _fake_git(monkeypatch)
+    assert git_commit() == '9adc909'
+
+
+def test_changed_code_is_marked_dirty(monkeypatch):
+    _fake_git(monkeypatch, status_out=' M tools/evaluate.py\n')
+    assert git_commit() == '9adc909-dirty'
+
+
+def test_a_failed_dirty_probe_says_unknown_rather_than_clean(monkeypatch):
+    """The whole point of the stamp is tracing a number back to its code.
+
+    Returning the bare hash when the probe failed would assert a clean tree we
+    never actually looked at -- the failure mode the docstring calls worse than
+    recording nothing. A timeout is a SubprocessError, so this is reachable on
+    any large or contended repository.
+    """
+    import subprocess as sp
+    _fake_git(monkeypatch, status_raises=sp.TimeoutExpired('git', 10))
+    assert git_commit() == '9adc909-unknown'
+
+
+def test_a_nonzero_status_exit_also_says_unknown(monkeypatch):
+    # A non-zero exit leaves stdout empty, which the old code read as "clean".
+    _fake_git(monkeypatch, status_rc=128, status_out='')
+    assert git_commit() == '9adc909-unknown'
+
+
+# --- the model guard must not fire on the framework's own baselines --------
+
+def _guard_calls(monkeypatch, argv):
+    """Run main() far enough to see which agents the model guard was applied to.
+
+    Drives the real argument parsing and the real branch, then stops before any
+    match is played. Asserting on FRAMEWORK_AGENTS membership instead would pin
+    a property of the set rather than the guard that uses it -- deleting the
+    guard would leave such a test green.
+    """
+    calls = []
+    monkeypatch.setattr(evaluate, 'check_model_present', calls.append)
+
+    def stop(*args, **kwargs):
+        raise SystemExit('reached evaluate()')
+
+    monkeypatch.setattr(evaluate, 'evaluate', stop)
+    monkeypatch.setattr(sys, 'argv', ['evaluate.py', *argv])
+    with pytest.raises(SystemExit):
+        evaluate.main()
+    return calls
+
+
+def test_the_mirror_guard_skips_framework_baselines(monkeypatch):
+    """`--lineup mirror --mirror-agent random_agent` is the only way to record a
+    three-random baseline. Demanding a trained model from an agent that has none
+    by design would make that comparison impossible."""
+    calls = _guard_calls(monkeypatch,
+                         ['--lineup', 'mirror', '--mirror-agent', 'random_agent'])
+    assert calls == ['taco_kebab_agent']
+
+
+def test_the_mirror_guard_still_fires_on_one_of_our_own_versions(monkeypatch):
+    """The case the guard exists for: a fresh version directory has no model."""
+    calls = _guard_calls(monkeypatch,
+                         ['--lineup', 'mirror', '--mirror-agent', 'taco_kebab_v1'])
+    assert calls == ['taco_kebab_agent', 'taco_kebab_v1']
+
+
+def test_no_log_disables_the_guard_entirely(monkeypatch):
+    """--no-log is how the untrained performance floor in the report was made."""
+    assert _guard_calls(monkeypatch, ['--no-log']) == []
+
+
+def test_the_framework_set_covers_every_shipped_agent():
+    assert 'taco_kebab_agent' not in FRAMEWORK_AGENTS
+    for name in ('random_agent', 'rule_based_agent', 'coin_collector_agent'):
+        assert name in FRAMEWORK_AGENTS
