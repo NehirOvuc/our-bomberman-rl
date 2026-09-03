@@ -33,7 +33,23 @@ N_STEP = int(os.environ.get('TACO_NSTEP', '1'))
 #: so this is already relative to agent_code/taco_kebab_agent/.
 #: Model A saves .npz, Model B .joblib, so the two arms cannot overwrite each
 #: other's weights when they are trained back to back.
-MODEL_PATH = 'model_b.joblib' if MODEL_KIND == 'b' else 'model_a.npz'
+#:
+#: Set TACO_MODEL_PATH to override this computed default and point at a
+#: specific saved file instead. tools/evaluate.py's --lineup mirror needs
+#: this to compare two saved model versions against each other, which
+#: otherwise requires manually copying the whole agent directory, since
+#: MODEL_PATH is otherwise fixed. Same bare-filename constraint as above
+#: applies, and it's validated eagerly here (like N_STEP) rather than
+#: deferred to setup() the way AGENT_SEED is: a malformed override is a
+#: config mistake to catch immediately, not a training input to react to.
+TACO_MODEL_PATH = os.environ.get('TACO_MODEL_PATH')
+if TACO_MODEL_PATH is not None and os.path.basename(TACO_MODEL_PATH) != TACO_MODEL_PATH:
+    raise ValueError(
+        f"TACO_MODEL_PATH must be a bare filename with no directory "
+        f"component -- got {TACO_MODEL_PATH!r}."
+    )
+
+MODEL_PATH = TACO_MODEL_PATH or ('model_b.joblib' if MODEL_KIND == 'b' else 'model_a.npz')
 
 #: Seed for this agent's own exploration RNG. The framework's --seed flag
 #: deliberately does not cover agent randomness (only world generation --
