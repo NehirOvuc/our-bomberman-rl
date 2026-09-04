@@ -16,6 +16,13 @@ Three rules the vector follows (interface_contract.md sections 2 and 3):
    of them.
 4. No constant term. The intercept belongs to the model: a constant here is
    not a description of the state, and it survives no ablation.
+5. One interaction term, `bomb_worth_it`. Rules 1-4 describe the board one
+   quantity at a time, which is all a linear model can add up. Bombing is
+   worth it only when two of those quantities hold together -- there is
+   something to destroy AND there is a way out -- and a sum of the two cannot
+   express a conjunction. This is the lecture's augmented feature for a
+   non-linear boundary, and it is the one place we pay for it. It still ranks
+   nothing: it says the situation is favourable, not that BOMB is the move.
 """
 
 import numpy as np
@@ -56,6 +63,7 @@ FEATURE_NAMES = [
     'bomb_crate_count',             # 30
     'bomb_hits_opponent',           # 31
     'bomb_escape_possible',         # 32
+    'bomb_worth_it',                # 33
 ]
 
 #: interface_contract.md section 2. Import this; do not hard-code the number.
@@ -156,6 +164,14 @@ def state_to_features(game_state: dict) -> np.ndarray:
         ok, _ = find_escape(v_free, here, v_lethal, safe_from(v_lethal),
                             blocked_now=others_set)
         phi[32] = float(ok)
+
+        # Rule 5. The product, not the sum: a linear model given both terms
+        # separately can only trade one off against the other, so it cannot
+        # say "bombing pays here" without also saying "bombing pays a little
+        # wherever there are crates", which is how you get an agent that
+        # bombs itself. Graded rather than boolean, so it keeps the crate
+        # count instead of collapsing it to "some".
+        phi[33] = phi[30] * phi[32]
 
     return phi
 

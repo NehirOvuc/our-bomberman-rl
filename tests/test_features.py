@@ -268,3 +268,81 @@ def test_bombing_an_open_board_is_survivable():
 #########
 """))
     assert f(phi, 'bomb_escape_possible') == 1.0
+
+
+# --- the interaction term -------------------------------------------------
+
+def test_bomb_worth_it_is_the_product_of_its_two_parts():
+    phi = state_to_features(make_state("""
+#########
+#ac.....#
+#.......#
+#.......#
+#########
+"""))
+    assert f(phi, 'bomb_worth_it') == (f(phi, 'bomb_crate_count')
+                                       * f(phi, 'bomb_escape_possible'))
+
+
+def test_bomb_worth_it_is_zero_with_crates_but_no_way_out():
+    """The reason the term exists: a sum would still call this promising."""
+    phi = state_to_features(make_state("""
+#####
+#ac##
+#.###
+#####
+"""))
+    assert f(phi, 'bomb_crate_count') > 0.0
+    assert f(phi, 'bomb_escape_possible') == 0.0
+    assert f(phi, 'bomb_worth_it') == 0.0
+
+
+def test_bomb_worth_it_is_zero_with_a_way_out_but_nothing_to_destroy():
+    phi = state_to_features(make_state("""
+#########
+#a......#
+#.......#
+#.......#
+#########
+"""))
+    assert f(phi, 'bomb_escape_possible') == 1.0
+    assert f(phi, 'bomb_crate_count') == 0.0
+    assert f(phi, 'bomb_worth_it') == 0.0
+
+
+def test_the_two_half_cases_are_indistinguishable_to_a_sum():
+    """Both halves score the same when added, and both are bad.
+
+    This is the whole argument for the feature: a linear model sees
+    crate_count + escape_possible and cannot tell these two apart from each
+    other, nor either of them from the case where both hold a little.
+    """
+    crates_no_escape = state_to_features(make_state("""
+#####
+#ac##
+#.###
+#####
+"""))
+    escape_no_crates = state_to_features(make_state("""
+#########
+#a......#
+#.......#
+#.......#
+#########
+"""))
+    products = [f(p, 'bomb_worth_it')
+                for p in (crates_no_escape, escape_no_crates)]
+    assert products == [0.0, 0.0]
+    sums = [f(p, 'bomb_crate_count') + f(p, 'bomb_escape_possible')
+            for p in (crates_no_escape, escape_no_crates)]
+    assert all(s > 0.0 for s in sums)
+
+
+def test_bomb_worth_it_is_zero_when_no_bomb_is_available():
+    phi = state_to_features(make_state("""
+#########
+#ac.....#
+#.......#
+#########
+""", bombs_left=False))
+    assert f(phi, 'bomb_worth_it') == 0.0
