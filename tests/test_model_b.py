@@ -26,7 +26,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from agent_code.taco_kebab_agent.bfs import ACTIONS  # noqa: E402
 from agent_code.taco_kebab_agent.features import FEATURE_DIM  # noqa: E402
 from agent_code.taco_kebab_agent.model import Model, Transition  # noqa: E402
-from agent_code.taco_kebab_agent.model_b import ModelB  # noqa: E402
+from agent_code.taco_kebab_agent.model_b import (  # noqa: E402
+    MAX_SAMPLES_PER_ACTION, MIN_SAMPLES_TO_FIT, ModelB)
 
 #: Feature indices this test file leans on, by name rather than by number, so
 #: the tests say what they mean and break loudly if features.py is reordered.
@@ -148,6 +149,55 @@ def test_refit_replaces_rather_than_accumulates():
     assert model.predict_q(state)[bomb] == pytest.approx(10.0, abs=1.0)
     model.refit(_transitions(rng, 500, 'BOMB', lambda p: -10.0))
     assert model.predict_q(state)[bomb] == pytest.approx(-10.0, abs=1.0)
+
+
+def test_refit_subsamples_a_batch_above_the_cap_deterministically():
+    """train.py hands refit() the *entire* replay buffer on every call, which
+    grows without bound as training goes on -- MAX_SAMPLES_PER_ACTION exists
+    to cap the cost of fitting on that. This checks the cap actually fires
+    (the fitted forest saw exactly MAX_SAMPLES_PER_ACTION rows, not the whole
+    batch), and that it does so reproducibly: two independent models with the
+    same random_state, refit on the same over-cap batch, must subsample
+    identically and therefore predict identically -- otherwise comparing
+    different MAX_SAMPLES_PER_ACTION candidates (benchmark_model_b.py) would
+    be comparing subsampling noise rather than the cap itself.
+    """
+    rng = np.random.default_rng(8)
+    action = 'BOMB'
+    batch = _transitions(rng, MAX_SAMPLES_PER_ACTION + 2000, action,
+                         lambda p: p[BOMB_CRATE_COUNT])
+
+    model1 = ModelB(n_estimators=5, random_state=123)
+    model1.refit(batch)
+    model2 = ModelB(n_estimators=5, random_state=123)
+    model2.refit(batch)
+
+    # ExtraTreesRegressor defaults to bootstrap=False, so a fitted tree's
+    # root node holds exactly the number of rows it was trained on -- a
+    # direct read of how many rows actually reached forest.fit().
+    root_samples = model1._forests[action].estimators_[0].tree_.n_node_samples[0]
+    assert root_samples == MAX_SAMPLES_PER_ACTION
+
+    states = rng.random((16, FEATURE_DIM)).astype(np.float32)
+    np.testing.assert_allclose(
+        model1.predict_q_batch(states), model2.predict_q_batch(states), rtol=1e-6)
+
+
+def test_refit_does_not_trim_a_batch_at_or_below_the_cap():
+    """A batch that doesn't exceed MAX_SAMPLES_PER_ACTION must reach
+    forest.fit() untouched -- the cap is a ceiling, not a fixed subsample size.
+    """
+    rng = np.random.default_rng(9)
+    action = 'BOMB'
+    n_rows = MIN_SAMPLES_TO_FIT + 50  # above the fit floor, comfortably below the cap
+    assert n_rows < MAX_SAMPLES_PER_ACTION
+    batch = _transitions(rng, n_rows, action, lambda p: p[BOMB_CRATE_COUNT])
+
+    model = ModelB(n_estimators=5, random_state=123)
+    model.refit(batch)
+
+    root_samples = model._forests[action].estimators_[0].tree_.n_node_samples[0]
+    assert root_samples == n_rows
 
 
 # --------------------------------------------------------------------------
