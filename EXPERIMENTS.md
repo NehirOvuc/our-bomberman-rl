@@ -35,8 +35,9 @@ version to score anything at all alone.
 | v5 | v4 with the buffer bug fixed | 0.472 | 0.00 | 0.00 | worse than v2c |
 | v7 | **decision forest instead of a line** | 1.260 | 7.68 | 3.38 | **it bombs** |
 | v8 | **+ 5-step reward window (Nehir)** | **2.065** | 6.96 | **13.52** | **biggest jump** |
+| v9 | **+ symmetry augmentation restored (Daniel)** | **2.466** | 8.63 | **19.01** | **best so far** |
 
-Alone on the board: v1–v5 scored **0.000**. v7 scores **0.155**.
+Alone on the board: v1–v5 scored **0.000**. v7 scores **0.155**, v9 scores **1.217**.
 
 *(v6 was v7 with a buffer bug that flattered it to 1.902 — excluded.)*
 
@@ -49,6 +50,27 @@ no change to the reward table. It also beat the gain from switching to the
 forest (+0.805 against +0.788), which is why "the model type was the binding
 constraint" has been withdrawn from the report. `train.py` turned out never to
 have read `n_step` on the replay path, so every arm before v8 ran at 1.
+
+**v9 is the second biggest, and it was Daniel's.** Merging PR #1 he noticed that
+Nehir's symmetry augmentation — the trick that turns every board into eight by
+flipping and rotating it — had been silently dropped when the training loop was
+rewritten. Putting it back was worth **+0.4** on its own: 2.065 → 2.466, and the
+two confidence intervals do not overlap. The agent bombs *more* (6.96 → 8.63)
+and kills itself *less* (0.207 → 0.123 suicides per round), which is what eight
+times the practice at escaping your own bomb should buy. Alone on the board it
+went from 0.155 to **1.217**.
+
+One number went the wrong way: the share of moves that are illegal rose from
+6.7% to 9.4%. That is expected and is written up in the report. An illegal move
+leaves you exactly where you were, so the model still keeps almost all the value
+it had, and the −0.1 we charge for it has to beat the model's own error — which
+grows as the scores grow. The penalty did not get weaker; the numbers it is
+competing against got bigger.
+
+Note for anyone comparing rows: **v1–v8 were all trained without augmentation
+and v9 with it.** The eight-arm table above is still a fair comparison within
+itself, but v9 is not a ninth arm in the same series — it changes one thing
+against v8 and two against v7.
 
 ---
 
@@ -90,31 +112,38 @@ have read `n_step` on the replay path, so every arm before v8 ran at 1.
 
 ## For Daniel
 
-Prototypes on this branch, in your files. Yours to take, rewrite or reject.
+**All taken into PR #1 (`e4ddd37`) — this section is history now.** What was here:
+`model_b.py` (the forest, a new file so `model.py` was untouched), the
+`callbacks.py` resume fix, and `train.py`'s cross-stage replay buffer plus the
+n-step targets that the setting had never actually been wired to.
 
-- `model_b.py` — the forest. New file, `model.py` untouched.
-- `callbacks.py` — training now resumes from saved weights (it always started
-  from zero, which made the curriculum impossible to run). `TACO_MODEL=b` and
-  `TACO_NSTEP=5` switch arms.
-- `train.py` — replay buffer survives between stages; n-step targets actually
-  wired up (the setting existed but was connected to nothing).
-- **Still open:** an untrained model returns six zeros and picks UP, 46% invalid
-  moves early on. Needs random tie-breaking. Exploration also uses numpy's global
-  RNG, so runs aren't reproducible under `--seed`.
+Both items that were open are fixed on his branch: Q-value ties now break
+randomly instead of always picking UP, and the agent has its own seeded RNG
+(`TACO_SEED`) so a run is reproducible. He also restored the symmetry
+augmentation that the rewrite had dropped — that is v9, above.
+
+**One thing to know before running the forest again:** augmentation makes one
+refit cost **75 s instead of 6.8 s** on a full buffer. Eight times the data is
+eighteen times the tree-fitting cost, because that scales superlinearly — Model
+A's entire refit is 10.6 s by comparison. Peak memory 0.7 → 3.0 GB, saved model
+9.3 → 19.6 MB, a full curriculum about 4 hours. Step time is unaffected at
+7.4 ms against a 500 ms budget.
 
 ## For Nehir
 
 - PR #3 is reviewed and should be merged.
 - Your curriculum is what every arm since v2c trains on.
 - Your interaction feature vs the forest is the experiment that now decides
-  Section 6. It needs a matched scenario before either result means anything.
+  Section 6. It needs a matched scenario before either result means anything —
+  and the baseline it has to beat is now **v9's 2.466**, not v8's 2.065, so both
+  linear arms have to be trained with augmentation on.
 
 ---
 
 ## Running it
 
 ```bash
-.venv/bin/python -m pytest tests -q                    # 132 tests
+.venv/bin/python -m pytest tests -q                    # 161 tests
 
 # evaluate any version (appends a row to experiments/experiment-log.csv)
 TACO_MODEL=b .venv/bin/python tools/evaluate.py --agent taco_kebab_agent \
