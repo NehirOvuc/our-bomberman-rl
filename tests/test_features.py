@@ -75,8 +75,15 @@ def test_extraction_is_deterministic():
     assert np.array_equal(state_to_features(st), state_to_features(st))
 
 
-def test_bias_is_one():
-    assert f(state_to_features(make_state(OPEN_BOARD)), 'bias') == 1.0
+def test_there_is_no_intercept_feature():
+    """The intercept belongs to the model, not to phi(s).
+
+    Measured on 930 real states: a constant column here plus the model's own
+    is numerically identical to a single intercept penalised at lambda/2, so
+    the intercept would be regularised half as hard as every other weight
+    without anyone choosing that.
+    """
+    assert 'bias' not in FEATURE_NAMES
 
 
 # --- what is next to me ---------------------------------------------------

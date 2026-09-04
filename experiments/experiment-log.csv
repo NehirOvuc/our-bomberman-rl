@@ -1,0 +1,19 @@
+date,commit,agent,version,scenario,lineup,seeds,rounds,score_mean,score_ci,coins,kills,suicides,bombs,crates,invalid_rate,steps_survived,seeds_won,note
+2026-09-02,9adc909,taco_kebab_agent,v1,classic,tournament,900-909,100,0.779,0.038,0.779,0.0,0.0,0.0,0.0,0.019,226.5,0/10,contract table only; 2000 rounds seed 1
+2026-09-02,9adc909,taco_kebab_agent,v1,classic,solo,900-909,100,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,400.0,,contract table only; 2000 rounds seed 1
+2026-09-02,9adc909,taco_kebab_agent,v2,classic,tournament,900-909,100,0.764,0.058,0.764,0.0,0.0,0.0,0.0,0.0161,235.0,0/10,+ 4 PLAN.md bomb/danger events; 2000 rounds seed 1
+2026-09-02,9adc909,taco_kebab_agent,v2,classic,solo,900-909,100,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,400.0,,+ 4 PLAN.md bomb/danger events; 2000 rounds seed 1
+2026-09-02,57ce8c9,taco_kebab_agent,v2-curriculum,classic,tournament,900-909,100,0.899,0.078,0.899,0.0,0.0,0.0,0.0,0.0167,228.9,0/10,"curriculum coin-heaven->crate-easy->crate-mid->loot-crate->classic, 4000 rounds total"
+2026-09-02,57ce8c9,taco_kebab_agent,v2-curriculum,classic,solo,900-909,100,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,400.0,,"curriculum, 4000 rounds total"
+2026-09-02,7821ba5,taco_kebab_agent,v3-forgetting,classic,tournament,900-909,100,0.176,0.026,0.176,0.0,0.003,0.11,0.02,0.089,219.6,0/10,"forget=0.99 + curriculum coin-heaven->crate-easy->crate-mid->loot-crate->classic, 4000 rounds total"
+2026-09-02,016f1ad,taco_kebab_agent,v3-forgetting,classic,solo,900-909,100,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0328,400.0,,"forget=0.99 + curriculum, 4000 rounds total"
+2026-09-02,0083e54,taco_kebab_agent,v4-replay,classic,tournament,900-909,100,0.184,0.028,0.184,0.0,0.0,0.0,0.0,0.0412,180.3,0/10,"replay buffer 20k + refit every 25 rounds + curriculum, 4000 rounds"
+2026-09-02,0083e54,taco_kebab_agent,v4-replay,classic,solo,900-909,100,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.008,400.0,,"replay buffer + curriculum, 4000 rounds total"
+2026-09-02,50a1e67,taco_kebab_agent,v4-replay,classic,tournament,900-909,100,0.211,0.02,0.211,0.0,0.002,0.01,0.0,0.0463,233.2,0/10,"replay buffer 20k + refit every 25 rounds + curriculum, 4000 rounds"
+2026-09-02,50a1e67,taco_kebab_agent,v4-replay,classic,solo,900-909,100,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,400.0,,"replay buffer + curriculum, 4000 rounds total"
+2026-09-02,d5a47c4,taco_kebab_agent,v5-replay-spanning,classic,tournament,900-909,100,0.472,0.052,0.467,0.001,0.0,0.0,0.0,0.0191,240.1,0/10,replay buffer spanning all 5 stages (corrected); curriculum 4000 rounds; Model A ridge-linear
+2026-09-02,d5a47c4,taco_kebab_agent,v5-replay-spanning,classic,solo,900-909,100,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,400.0,,replay buffer spanning all 5 stages (corrected); curriculum 4000 rounds; Model A ridge-linear
+2026-09-02,d5a47c4,taco_kebab_agent,v6-model-b,classic,tournament,900-909,100,1.902,0.094,1.387,0.103,0.198,14.74,3.31,0.0986,319.9,0/10,Model B ExtraTrees FQI; same buffer/curriculum/rewards/seeds as v5; only the approximator differs; buffer capped at 250k in stages 4-5
+2026-09-02,feac5cc,taco_kebab_agent,v7-model-b-500k,classic,tournament,900-909,100,1.26,0.084,1.07,0.038,0.095,7.68,3.38,0.1256,337.3,0/10,"Model B ExtraTrees FQI, replay cap 500k so nothing is evicted; otherwise identical to v6; matched control v5-replay-spanning"
+2026-09-02,bf03e0d,taco_kebab_agent,v7-model-b-500k,classic,solo,900-909,100,0.155,0.036,0.155,0.0,0.0,16.5,2.38,0.0475,400.0,,"Model B ExtraTrees FQI, replay cap 500k so nothing is evicted; otherwise identical to v6; matched control v5-replay-spanning"
+2026-09-02,250b544,taco_kebab_agent,v8-model-b-nstep5,classic,tournament,900-909,100,2.065,0.094,1.87,0.039,0.207,6.96,13.52,0.0666,289.0,0/10,"Model B ExtraTrees FQI, n_step=5 spans BOMB_TIMER+EXPLOSION_TIMER=6; otherwise identical to v7"

@@ -265,7 +265,9 @@ def test_a_model_fitted_on_augmented_data_has_an_equivariant_q():
     each learning its own quirks. This is the property the report should show.
     """
     phi, batch = _sample_batch()
-    model = Model()
+    # Passed explicitly: model.py still hard-codes 34 instead of importing
+    # FEATURE_DIM, so its default no longer tracks the feature vector.
+    model = Model(n_features=FEATURE_DIM)
     model.update(augment_transitions(batch))
 
     q = model.predict_q(phi)

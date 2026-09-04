@@ -4,8 +4,11 @@ One linear function per action, Q(s, a) = beta_a . phi(s) + bias_a, fitted by
 ridge-regularised least squares on n-step TD targets. The bias is folded into
 beta_a by augmenting phi(s) with a constant 1.0 feature.
 
-Model B (fitted Q-iteration with a regression forest) will share the same
-`predict_q` / `update` / `save` / `load` interface in a future file.
+Model B (fitted Q-iteration with a regression forest) shares the same
+`predict_q` / `refit` / `save` / `load` interface, in `model_b.py`. Its
+`update()` deliberately raises NotImplementedError -- a forest has no
+incremental fit, so `refit(batch)` is the entry point train.py uses for both
+models; see interface_contract.md section 4.
 """
 
 import os
@@ -13,14 +16,14 @@ from collections import namedtuple
 
 import numpy as np
 
-ACTIONS = ['UP', 'DOWN', 'LEFT', 'RIGHT', 'BOMB', 'WAIT']
-N_FEATURES = 34
+from .features import FEATURE_DIM
+from .bfs import ACTIONS
 
 Transition = namedtuple('Transition', [
-    'features',       # np.ndarray (34,)
+    'features',       # np.ndarray (FEATURE_DIM,)
     'action',         # str, one of ACTIONS
     'reward',         # float — output of reward_from_events
-    'next_features',  # np.ndarray (34,) or None if terminal
+    'next_features',  # np.ndarray (FEATURE_DIM,) or None if terminal
     'done',           # bool
 ])
 
@@ -41,17 +44,38 @@ class Model:
     history. beta_a = solve(A_a, b_a) is re-solved after each update.
     """
 
-    def __init__(self, ridge_lambda: float = 1.0, n_features: int = N_FEATURES,
-                 n_step: int = 1, gamma: float = 0.99):
+    def __init__(self, ridge_lambda: float = 1.0, n_features: int = FEATURE_DIM,
+                 n_step: int = 1, gamma: float = 0.99, forget: float = 1.0):
         self.ridge_lambda = ridge_lambda
         self.n_features = n_features
         self.n_step = n_step
         self.gamma = gamma
 
+        # Discount applied to the accumulated statistics before each batch is
+        # folded in. forget = 1.0 keeps every transition for ever, which is
+        # correct for a fixed regression target but wrong for ours: the target
+        # is reward + gamma * max_q(next), computed with whatever beta was at
+        # the time, so a target generated in round 1 from a zero Q-function
+        # carries the same weight as one from round 4000. Measured effect:
+        # ||A_BOMB|| reached 43900 over a 4000-round curriculum, so the last
+        # stage -- the one that has to transfer to the tournament -- had the
+        # least capacity left to learn. forget < 1 gives an effective window of
+        # roughly 1 / (1 - forget) update calls.
+        self.forget = forget
+
         self.actions = ACTIONS
         dim = n_features + 1  # +1 for the bias term
 
-        self._A = {action: ridge_lambda * np.eye(dim, dtype=np.float64) for action in self.actions}
+        # Ridge penalty excludes the intercept (last augmented column): standard
+        # practice for ridge regression, and confirmed to matter here since
+        # actions accumulate transitions at different rates under epsilon-greedy.
+        penalty = ridge_lambda * np.eye(dim, dtype=np.float64)
+        penalty[-1, -1] = 0.0
+        #: Kept so the ridge term can be topped back up after each decay --
+        #: without that it would decay away too and the fit lose its
+        #: regularisation exactly when the data is sparsest.
+        self._penalty = penalty
+        self._A = {action: penalty.copy() for action in self.actions}
         self._b = {action: np.zeros(dim, dtype=np.float64) for action in self.actions}
         self._beta = {action: np.zeros(dim, dtype=np.float64) for action in self.actions}
 
@@ -67,6 +91,19 @@ class Model:
         q_values = np.array([phi @ self._beta[action] for action in self.actions], dtype=np.float32)
         return q_values
 
+    def predict_q_batch(self, features: np.ndarray) -> np.ndarray:
+        """Q-values for many states at once: (n, n_features) -> (n, n_actions).
+
+        Same arithmetic as predict_q, but the replay refit needs the maximum
+        over actions for every transition in the buffer on every refit, and
+        doing that one state at a time in Python is what would make refitting
+        too slow to use.
+        """
+        phi = np.hstack([np.asarray(features, dtype=np.float64),
+                         np.ones((len(features), 1))])
+        beta = np.stack([self._beta[action] for action in self.actions], axis=1)
+        return phi @ beta
+
     def update(self, batch: list[Transition]) -> None:
         by_action = {action: [] for action in self.actions}
         for transition in batch:
@@ -79,9 +116,37 @@ class Model:
             phi = np.stack([self._augment(t.features) for t in transitions])
             y = np.array([t.reward for t in transitions], dtype=np.float64)
 
+            if self.forget < 1.0:
+                # Decay what we already know, then restore the ridge term so it
+                # does not decay with it. With no further data the statistics
+                # settle back to the penalty rather than to zero.
+                self._A[action] *= self.forget
+                self._b[action] *= self.forget
+                self._A[action] += (1.0 - self.forget) * self._penalty
+
             self._A[action] += phi.T @ phi
             self._b[action] += phi.T @ y
             self._beta[action] = np.linalg.solve(self._A[action], self._b[action])
+
+    def refit(self, batch: list[Transition]) -> None:
+        """Discard the accumulated statistics and fit from scratch on `batch`.
+
+        This is the alternative to the `forget` factor, and a better one. A
+        discount fades old experience uniformly with age, which cannot tell
+        "the navigation I learned in stage 1, still true" apart from "the value
+        estimate I made in stage 1, now wrong". Refitting from a replay buffer
+        keeps the experience and replaces only the estimates: the caller
+        recomputes every target against the current Q-function before calling
+        this, so nothing stale survives, while the transitions themselves are
+        still all there. That is fitted Q-iteration, and it is what PLAN.md
+        already specifies for Model B -- so using it here makes the two models
+        differ only in the function approximator.
+        """
+        dim = self.n_features + 1
+        for action in self.actions:
+            self._A[action] = self._penalty.copy()
+            self._b[action] = np.zeros(dim, dtype=np.float64)
+        self.update(batch)
 
     def save(self, path: str) -> None:
         if os.path.isabs(path):
@@ -99,6 +164,7 @@ class Model:
             n_features=self.n_features,
             n_step=self.n_step,
             gamma=self.gamma,
+            forget=self.forget,
             **arrays,
         )
 
@@ -112,6 +178,8 @@ class Model:
         self.n_features = int(data['n_features'])
         self.n_step = int(data['n_step'])
         self.gamma = float(data['gamma'])
+        # Older files predate the forgetting factor; they mean forget = 1.0.
+        self.forget = float(data['forget']) if 'forget' in data else 1.0
 
         for action in self.actions:
             self._A[action] = data[f'A_{action}']

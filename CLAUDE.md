@@ -95,8 +95,11 @@ agents are copied from), `agent_code/rule_based_agent` (scripted baseline, used 
 opponent), `agent_code/coin_collector_agent`, `agent_code/peaceful_agent`, `agent_code/random_agent`.
 
 ### `agent_code/taco_kebab_agent` — our agent
-Currently a direct copy of `tpl_agent`, not yet adapted. Build against `interface_contract.md` (see
-below) rather than the template's placeholder logic/action order.
+`callbacks.py` and `train.py` are implemented against `interface_contract.md` (see below) rather than
+`tpl_agent`'s placeholder logic/action order. `callbacks.py` wires `state_to_features` (currently the
+`dev_stubs.state_to_features_stub`) into `Model.predict_q`, then picks an action via epsilon-greedy
+selection. `train.py` builds n-step TD targets from per-step transitions and feeds them to
+`Model.update`, persisting the model to `model_a.npz` at the end of each round.
 
 ### Interface contract (`interface_contract.md`) — read before writing agent logic
 This is the team's locked cross-member contract (status: locked 12.08.2026) and takes precedence over
