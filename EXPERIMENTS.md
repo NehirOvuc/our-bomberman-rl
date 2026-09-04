@@ -36,8 +36,9 @@ version to score anything at all alone.
 | v7 | **decision forest instead of a line** | 1.260 | 7.68 | 3.38 | **it bombs** |
 | v8 | **+ 5-step reward window (Nehir)** | **2.065** | 6.96 | **13.52** | **biggest jump** |
 | v9 | **+ symmetry augmentation restored (Daniel)** | **2.466** | 8.63 | **19.01** | **best so far** |
+| v10 | **+ fit floor removed (Nehir's objection, tested)** | 2.507 | 9.93 | 23.22 | **solo more than doubles** |
 
-Alone on the board: v1–v5 scored **0.000**. v7 scores **0.155**, v9 scores **1.217**.
+Alone on the board: v1–v5 scored **0.000**. v7 scores **0.155**, v9 **1.217**, v10 **2.834**.
 
 *(v6 was v7 with a buffer bug that flattered it to 1.902 — excluded.)*
 
@@ -66,6 +67,36 @@ leaves you exactly where you were, so the model still keeps almost all the value
 it had, and the −0.1 we charge for it has to beat the model's own error — which
 grows as the scores grow. The penalty did not get weaker; the numbers it is
 competing against got bigger.
+
+**v10 answers Nehir's question, and it's a no.** She spotted that Model B skips
+fitting any action with fewer than 200 examples, and that an unfitted action
+scores 0.0 — which, early on when everything else scores negative, makes it the
+most attractive thing on the board. BOMB is the rarest action, so it stays
+unfitted longest. Her worry: maybe the forest only "learned" to bomb because
+bombing was the one thing it hadn't measured yet.
+
+We changed that one number from 200 to 1 and reran, nothing else touched. If she
+were right the score should have dropped. It didn't — 2.507 against 2.466, which
+is the same number given the error bars. **So the bombing is real and the
+comparison holds.** Worth saying that we wrote down how we'd read the result
+*before* running it.
+
+But the arm found something nobody was looking for: **alone on the board the
+agent goes from 1.217 to 2.834 and from 24.7 to 41.0 crates a round.** The floor
+was holding bombing back after all, just not for the reason proposed — BOMB
+simply waits longest to get fitted, and until it does the model can't tell when
+bombing pays. Against opponents the gain washes out: it bombs more and opens more
+crates, but kills itself more than twice as often (0.29 against 0.12) and lives
+44 fewer steps. First time in this project that being more aggressive and
+staying alive have pulled against each other.
+
+Two consequences. **Every number in the table above was measured with that floor
+in place**, so the comparisons between rows are still fair but the forest rows
+undersell the model. And the wasted-move rate is now **18.2%**, the worst we've
+recorded — same story as before, the penalty for an illegal move is fixed at
+−0.1 while the scores it competes against keep growing.
+
+Still untested: the 5000-row sampling cap, the other half of Nehir's review.
 
 Note for anyone comparing rows: **v1–v8 were all trained without augmentation
 and v9 with it.** The eight-arm table above is still a fair comparison within
