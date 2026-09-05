@@ -6,6 +6,7 @@ Model.update live in train.py.
 """
 
 import os
+import random
 
 import numpy as np
 
@@ -80,9 +81,17 @@ def setup(self):
                      f"{MODEL_PATH}, n_step={N_STEP}.")
     self.epsilon = 0.2  # exploration rate; tuned later via PLAN.md's hyperparameter grid search
 
-    # default_rng(None) seeds from OS entropy, preserving today's unseeded
-    # behaviour whenever TACO_SEED isn't set.
-    self.rng = np.random.default_rng(int(AGENT_SEED) if AGENT_SEED is not None else None)
+    # default_rng(None) would seed from OS entropy, so no --seed could make
+    # a run repeatable: this Generator is independent of numpy's global
+    # state, and it drives the epsilon-greedy draw and the tie-break in
+    # act() -- the tie-break unconditionally, so evaluation was as
+    # unrepeatable as training. Draw the seed from the stdlib generator,
+    # which main.py seeds from --seed and which no agent reseeds; numpy's
+    # global is unusable here because several framework agents call
+    # np.random.seed() with no argument in their own setup(). Unseeded
+    # runs behave as before, and TACO_SEED still overrides both.
+    seed = int(AGENT_SEED) if AGENT_SEED is not None else random.getrandbits(32)
+    self.rng = np.random.default_rng(seed)
 
     # Training continues from the saved weights when there are any. The
     # previous version returned here before the load whenever self.train was

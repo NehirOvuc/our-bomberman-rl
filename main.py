@@ -1,7 +1,10 @@
 import os
+import random
 from argparse import ArgumentParser
 from pathlib import Path
 from time import sleep, time
+
+import numpy as np
 from tqdm import tqdm
 
 import settings as s
@@ -162,7 +165,30 @@ def main(argv = None):
         for agent_name in args.agents:
             agents.append((agent_name, len(agents) < args.train))
 
+        # --seed used to reach only environment.py's own Generator, so the
+        # board layout was reproducible while every agent decision was not.
+        # Both halves below are load-bearing, and the split is not arbitrary:
+        # agents' setup() runs inside the constructor, between them.
+        #
+        # Before: our setup() derives its own Generator's seed from the stdlib
+        # global, and rule_based_agent and coin_collector_agent shuffle their
+        # candidate moves with the same stdlib generator at run time. Nothing
+        # reseeds it, so setting it once here is enough for all three.
+        #
+        # After: peaceful_agent, random_agent and coin_collector_agent all
+        # call np.random.seed() with no argument in their own setup(), which
+        # reseeds numpy's global from OS entropy and throws away anything we
+        # set beforehand -- and they then draw their moves from that global.
+        # Reseeding once the constructor has returned is the only point at
+        # which it sticks, short of editing framework agents.
+        if args.seed is not None:
+            random.seed(args.seed)
+
         world = BombeRLeWorld(args, agents)
+
+        if args.seed is not None:
+            np.random.seed(args.seed)
+
         every_step = not args.skip_frames
     elif args.command_name == "replay":
         world = ReplayWorld(args)
