@@ -266,8 +266,7 @@ def test_a_model_fitted_on_augmented_data_has_an_equivariant_q():
     """
     phi, batch = _sample_batch()
     # n_features passed explicitly rather than left to its default: the test
-    # should fail if model.py's default ever stops tracking FEATURE_DIM.model = Model(n_features=FEATURE_DIM)
-
+    # should fail if model.py's default ever stops tracking FEATURE_DIM.
     model = Model(n_features=FEATURE_DIM)
     model.update(augment_transitions(batch))
 
