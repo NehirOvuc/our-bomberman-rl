@@ -42,12 +42,29 @@ N_ESTIMATORS = 50
 MAX_DEPTH = 12
 MIN_SAMPLES_LEAF = 20
 
-#: Below this many rows, an action's share of the batch is too small to fit
-#: anything but noise, and leaving predict_q at its zero cold start for that
-#: action is more honest than a forest grown on a handful of points. This is
-#: the same judgement Model A makes implicitly: its ridge penalty already
-#: pulls a near-empty action's beta back toward zero rather than letting it
-#: chase a handful of samples.
+#: Below this many rows, an action's share of the batch would be too small to
+#: fit anything but noise -- if that ever happens, predict_q keeps that
+#: action's previous forest (or its zero cold start, if there's no previous
+#: forest yet) rather than fitting on a handful of points.
+#:
+#: Measured against the current pipeline (REFIT_EVERY, REPLAY_SIZE, and 8x
+#: symmetry augmentation): this floor has not been observed to bind at any
+#: refit so far, including the first one -- even BOMB, the rarest action,
+#: already clears 200 rows by then. So today it is a guard against a
+#: configuration this file does not control (a shorter REFIT_EVERY, weaker or
+#: disabled augmentation, or an early curriculum stage reaching refit before
+#: enough real transitions accumulate), not an active safeguard under current
+#: settings. It should stay -- just not be described as doing work it isn't
+#: currently doing.
+#:
+#: Separately: predict_q's zero cold start is not a neutral placeholder once
+#: training is underway. Movement Q-values run strongly negative early
+#: (roughly -1.8 to -3.1) and slightly positive on a trained forest
+#: (~+0.109 mean, measured over 20,000 real states) -- so 0.0 reads as
+#: optimistic early and pessimistic late, and it's a distribution shift
+#: rather than a clean flip: 0.0 ranks below all four movement actions in
+#: only about 35% of states. That matters anywhere this floor's fallback
+#: value gets compared against an already-trained forest's other actions.
 MIN_SAMPLES_TO_FIT = 200
 
 #: train.py's `_refit_from_replay` hands `refit` the *entire* replay buffer
