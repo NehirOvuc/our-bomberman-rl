@@ -32,7 +32,7 @@ from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import agent_code.taco_kebab_agent.model_b as model_b_module  # noqa: E402
 from agent_code.taco_kebab_agent.bfs import ACTIONS  # noqa: E402
