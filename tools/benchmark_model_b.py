@@ -66,7 +66,16 @@ def _synthetic_batch(rng, action, n_rows):
 
 
 def benchmark_predict_q(rng, n_calls):
-    """Time predict_q() on a model fit at today's real hyperparameters."""
+    """Time predict_q() on a model that has gone through a real save/load
+    round trip, at today's real hyperparameters.
+
+    The tournament never calls predict_q() on the freshly-fit in-memory
+    object -- callbacks.py always loads a model from disk via ModelB.load()
+    first -- so timing the in-memory model would benchmark an object that
+    never actually plays. This saves the fitted model to a scratch file,
+    reloads it into a fresh ModelB instance, and only then times predict_q()
+    on that reloaded object.
+    """
     model = ModelB(n_estimators=N_ESTIMATORS, max_depth=MAX_DEPTH,
                    min_samples_leaf=MIN_SAMPLES_LEAF, random_state=0)
     batch = []
@@ -77,11 +86,21 @@ def benchmark_predict_q(rng, n_calls):
     model.refit(batch)
     assert model.is_fitted, "benchmark batch was too small to fit any action"
 
+    scratch_path = "_benchmark_model_b_scratch.joblib"
+    try:
+        model.save(scratch_path)
+        reloaded = ModelB(n_estimators=N_ESTIMATORS, max_depth=MAX_DEPTH,
+                          min_samples_leaf=MIN_SAMPLES_LEAF, random_state=0)
+        reloaded.load(scratch_path)
+        assert reloaded.is_fitted, "reloaded model lost its fitted forests"
+    finally:
+        Path(scratch_path).unlink(missing_ok=True)
+
     states = rng.random((n_calls, FEATURE_DIM)).astype(np.float32)
     timings_ms = np.empty(n_calls)
     for i in range(n_calls):
         t0 = time.perf_counter()
-        model.predict_q(states[i])
+        reloaded.predict_q(states[i])
         timings_ms[i] = time.perf_counter() - t0
     return timings_ms * 1000.0
 
