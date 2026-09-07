@@ -65,7 +65,14 @@ MIN_SAMPLES_LEAF = 20
 #: rather than a clean flip: 0.0 ranks below all four movement actions in
 #: only about 35% of states. That matters anywhere this floor's fallback
 #: value gets compared against an already-trained forest's other actions.
-MIN_SAMPLES_TO_FIT = 200
+#:
+#: Overridable via TACO_MIN_SAMPLES_TO_FIT for the cold-start diagnostic
+#: Nehir raised on PR #5: rerunning with this set to 1 removes the floor
+#: entirely, so BOMB (the action that sits under it longest -- about 3.4%
+#: of transitions) gets a real fit instead of falling back to the 0.0
+#: default discussed above. Default of 200 is unchanged from before this
+#: override existed.
+MIN_SAMPLES_TO_FIT = int(os.environ.get('TACO_MIN_SAMPLES_TO_FIT', '200'))
 
 #: train.py's `_refit_from_replay` hands `refit` the *entire* replay buffer
 #: every REFIT_EVERY rounds -- up to REPLAY_SIZE raw transitions, already
