@@ -30,13 +30,28 @@ Fixed everywhere in the codebase — index `i` always means `ACTIONS[i]`.
 
 **Impacts:** `state_to_features(game_state: dict) -> np.ndarray`
 
-**Value chosen for N:** `33`
+**Value chosen for N:** whatever `features.FEATURE_DIM` says. Import it; do
+not write the number down.
 
-**Stub for Daniel and Ege to build against until feature freeze (18.08):**
 ```python
-def state_to_features_stub(game_state: dict) -> np.ndarray:
-    return np.random.randn(FEATURE_DIM).astype(np.float32)
+from .features import FEATURE_DIM
 ```
+
+This clause used to name a literal, and the literal was wrong twice: it said
+`34` after the constant `bias` column was dropped (a constant is not a
+description of the state, and the model owns its own intercept), and it would
+be wrong again the moment the `bomb_worth_it` interaction term lands. `N` is
+not a decision anyone can pin in a document — it is `len(FEATURE_NAMES)`, and
+that list changes whenever the ablations say it should. What is fixed, and
+what this section actually guarantees, is that the number is discoverable from
+one place at import time and never duplicated anywhere else.
+
+For the record, since the report has to state it: `33` at the time of writing,
+`34` once the interaction term merges.
+
+**Stub for Daniel and Ege to build against:** `dev_stubs.state_to_features_stub`
+(section 7). It imports `FEATURE_DIM` for exactly this reason, so it cannot
+drift from the real vector.
 
 **Constraint:** must run well within the 0.5s/step budget — Nehir benchmarks this in isolation.
 
@@ -57,10 +72,10 @@ def state_to_features_stub(game_state: dict) -> np.ndarray:
 **Value chosen:**
 ```python
 Transition = namedtuple('Transition', [
-    'features',       # np.ndarray (33,)
+    'features',       # np.ndarray (FEATURE_DIM,) — see section 2
     'action',         # str, one of ACTIONS
     'reward',         # float — output of reward_from_events
-    'next_features',  # np.ndarray (33,) or None if terminal
+    'next_features',  # np.ndarray (FEATURE_DIM,) or None if terminal
     'done',           # bool
 ])
 ```
