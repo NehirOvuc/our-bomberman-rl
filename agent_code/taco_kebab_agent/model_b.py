@@ -72,7 +72,22 @@ MIN_SAMPLES_LEAF = 20
 #: of transitions) gets a real fit instead of falling back to the 0.0
 #: default discussed above. Default of 200 is unchanged from before this
 #: override existed.
-MIN_SAMPLES_TO_FIT = int(os.environ.get('TACO_MIN_SAMPLES_TO_FIT', '200'))
+#:
+#: Parsed eagerly at import time, matching TACO_NSTEP's pattern in
+#: callbacks.py rather than TACO_SEED's deferred one: both
+#: tools/benchmark_model_b.py and tests/test_model_b.py import
+#: MIN_SAMPLES_TO_FIT directly as a module-level int, so deferring the parse
+#: (reading the raw string and only converting it where it's used, the way
+#: TACO_SEED does) would mean reworking both of those imports for no benefit
+#: here -- unlike AGENT_SEED, nothing about this value needs to fail loudly
+#: inside setup() specifically rather than at import time.
+_raw_min_samples_to_fit = os.environ.get('TACO_MIN_SAMPLES_TO_FIT', '200')
+try:
+    MIN_SAMPLES_TO_FIT = int(_raw_min_samples_to_fit)
+except ValueError as exc:
+    raise ValueError(
+        f"TACO_MIN_SAMPLES_TO_FIT must be an integer, got {_raw_min_samples_to_fit!r}."
+    ) from exc
 
 #: train.py's `_refit_from_replay` hands `refit` the *entire* replay buffer
 #: every REFIT_EVERY rounds -- up to REPLAY_SIZE raw transitions, already

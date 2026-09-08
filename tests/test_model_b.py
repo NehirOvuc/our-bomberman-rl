@@ -15,6 +15,7 @@ Run from the repository root:  python -m pytest tests
 """
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -136,6 +137,31 @@ def test_an_action_below_the_sample_floor_is_not_fit_on_noise():
     model.refit(_transitions(rng, 10, 'BOMB', lambda p: 3.0))
     assert not model.is_fitted
     assert np.all(model.predict_q(rng.random(FEATURE_DIM).astype(np.float32)) == 0.0)
+
+
+def test_min_samples_to_fit_default_is_200_when_env_unset():
+    """MIN_SAMPLES_TO_FIT's default is 200 when TACO_MIN_SAMPLES_TO_FIT is
+    unset -- pinned in a fresh subprocess rather than by reloading model_b.py
+    in-process.
+
+    Reloading the module here would rewrite its globals dict in place, which
+    the already-imported ModelB class shares via its methods' __globals__ --
+    every other test in this file that runs afterwards would then see
+    whatever MIN_SAMPLES_TO_FIT the reload left behind, not the value it
+    imported at collection time. A subprocess with a clean environment is the
+    only way to observe the real default without that risk.
+    """
+    env = {key: value for key, value in os.environ.items()
+           if key != 'TACO_MIN_SAMPLES_TO_FIT'}
+    result = subprocess.run(
+        [sys.executable, '-c',
+         'from agent_code.taco_kebab_agent.model_b import MIN_SAMPLES_TO_FIT; '
+         'print(MIN_SAMPLES_TO_FIT)'],
+        cwd=str(Path(__file__).resolve().parent.parent),
+        env=env, capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == '200'
 
 
 def test_refit_replaces_rather_than_accumulates():

@@ -39,7 +39,7 @@ from agent_code.taco_kebab_agent.bfs import ACTIONS  # noqa: E402
 from agent_code.taco_kebab_agent.features import FEATURE_DIM  # noqa: E402
 from agent_code.taco_kebab_agent.model import Transition  # noqa: E402
 from agent_code.taco_kebab_agent.model_b import (  # noqa: E402
-    MAX_DEPTH, MIN_SAMPLES_LEAF, MIN_SAMPLES_TO_FIT, N_ESTIMATORS, ModelB)
+    MAX_DEPTH, MIN_SAMPLES_LEAF, N_ESTIMATORS, ModelB)
 from agent_code.taco_kebab_agent.symmetry import N_TRANSFORMS  # noqa: E402
 from agent_code.taco_kebab_agent.train import REPLAY_SIZE  # noqa: E402
 import settings as s  # noqa: E402
@@ -51,6 +51,17 @@ BUDGET_MS = s.TIMEOUT * 1000.0
 #: benchmark -- see the module docstring for why uniform is the right stress
 #: case even though real training isn't uniform.
 DEFAULT_ROWS_PER_ACTION = REPLAY_SIZE * N_TRANSFORMS // len(ACTIONS)
+
+#: Per-action row count for the predict_q() benchmark below, fixed at 5x the
+#: production default of 200 (model_b.py's MIN_SAMPLES_TO_FIT). Deliberately a
+#: literal, not derived from MIN_SAMPLES_TO_FIT itself: that constant reads
+#: TACO_MIN_SAMPLES_TO_FIT, which is meant to be overridden in-shell for the
+#: cold-start diagnostic (model_b.py's own comment on it). If this benchmark
+#: derived its batch size from MIN_SAMPLES_TO_FIT, leaving that override set
+#: to 1 in a shell would silently shrink the benchmark to fitting on 5
+#: rows/action -- reporting a p99 latency number that looks fine against the
+#: 0.5 s/step budget but says nothing about a real forest.
+PREDICT_BENCHMARK_ROWS_PER_ACTION = 1000
 
 
 def _synthetic_batch(rng, action, n_rows):
@@ -80,9 +91,11 @@ def benchmark_predict_q(rng, n_calls):
                    min_samples_leaf=MIN_SAMPLES_LEAF, random_state=0)
     batch = []
     for action in ACTIONS:
-        # A handful of times MIN_SAMPLES_TO_FIT: enough for every action to
-        # actually get a forest, not a benchmark of the untrained zero-Q path.
-        batch.extend(_synthetic_batch(rng, action, MIN_SAMPLES_TO_FIT * 5))
+        # PREDICT_BENCHMARK_ROWS_PER_ACTION, not a multiple of
+        # MIN_SAMPLES_TO_FIT: enough for every action to actually get a
+        # forest, not a benchmark of the untrained zero-Q path -- see that
+        # constant's own comment for why it can't just be derived here.
+        batch.extend(_synthetic_batch(rng, action, PREDICT_BENCHMARK_ROWS_PER_ACTION))
     model.refit(batch)
     assert model.is_fitted, "benchmark batch was too small to fit any action"
 
