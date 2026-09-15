@@ -2,5 +2,6 @@ pygame
 tqdm
 numpy
 scipy
-scikit-learn
+# pinned: the shipped forest is pickled with 1.9.0
+scikit-learn==1.9.0
 joblib
