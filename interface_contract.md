@@ -131,6 +131,8 @@ def reward_from_events_stub(events, old_game_state=None, new_game_state=None) ->
 
 `path` must be relative — absolute paths break the Docker submission test.
 
+**Which model is submitted:** `callbacks.py` picks the approximator from `TACO_MODEL` and defaults to `b`, the forest. The tournament sets no environment variables, so that default *is* the submission. Any linear-model run must set `TACO_MODEL=a` explicitly, and experiment-log rows should record it.
+
 ---
 
 ## 7. Stub Location

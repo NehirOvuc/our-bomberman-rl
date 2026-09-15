@@ -15,12 +15,14 @@ from .model_b import ModelB
 
 from .features import state_to_features
 
-#: Which approximator to build. Set TACO_MODEL=b to run the forest, mirroring
+#: Which approximator to build. Defaults to the forest because the tournament
+#: runs with no environment variables, so the default is what gets submitted.
+#: Set TACO_MODEL=a to run the linear model, mirroring
 #: the TACO_FRESH switch below. An environment variable rather than two agent
 #: directories on purpose: it is the only way to guarantee the A and B arms
 #: share one act(), one feature call and one epsilon, which is what makes
 #: section 6 a controlled comparison instead of two separate agents.
-MODEL_KIND = os.environ.get('TACO_MODEL', 'a').lower()
+MODEL_KIND = os.environ.get('TACO_MODEL', 'b').lower()
 
 #: TD window length. 1 is the historical default. BOMB_TIMER (4) plus
 #: EXPLOSION_TIMER (2) is 6, so a bomb resolves six steps after it is dropped
