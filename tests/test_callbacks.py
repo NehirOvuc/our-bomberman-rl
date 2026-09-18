@@ -30,6 +30,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from helpers import make_state  # noqa: E402
 
 from agent_code.taco_kebab_agent import callbacks  # noqa: E402
+from agent_code.taco_kebab_agent.features import (FEATURE_DIM,  # noqa: E402
+                                                   FEATURE_GROUPS,
+                                                   FEATURE_NAMES)
 from agent_code.taco_kebab_agent.model import ACTIONS  # noqa: E402
 
 STATE = make_state("""
@@ -164,3 +167,43 @@ def test_unique_maximum_always_wins_unchanged():
     agent = _agent_with_fixed_q(q, train=False)
     actions = {callbacks.act(agent, STATE) for _ in range(50)}
     assert actions == {'LEFT'}
+
+
+def test_masking_is_off_by_default():
+    """The packaged agent must behave exactly as before unless TACO_MASK is
+    set: the tournament runs with no environment variables at all.
+    """
+    assert callbacks.MASK_ILLEGAL is False
+
+
+def test_legal_mask_is_read_from_the_feature_vector():
+    """Only RIGHT is walkable and a bomb is in hand, so those two plus the
+    always-legal WAIT are the executable actions -- and the indices come from
+    FEATURE_GROUPS rather than being written down here.
+    """
+    phi = np.zeros(FEATURE_DIM, dtype=np.float32)
+    phi[FEATURE_GROUPS['free'] + ACTIONS.index('RIGHT')] = 1.0
+    phi[FEATURE_NAMES.index('bomb_available')] = 1.0
+    mask = callbacks.legal_mask(phi)
+    assert [ACTIONS[i] for i in np.flatnonzero(mask)] == ['RIGHT', 'BOMB', 'WAIT']
+
+
+def test_masking_never_returns_an_action_the_board_forbids(monkeypatch):
+    """UP, DOWN and LEFT are walls on this board and carry the three highest
+    Q-values, which is exactly the failure the flag exists to remove.
+    """
+    monkeypatch.setattr(callbacks, 'MASK_ILLEGAL', True)
+    q = [9.0, 9.0, 9.0, 5.0, 1.0, 1.0]
+    agent = _agent_with_fixed_q(q, train=False)
+    picks = {callbacks.act(agent, STATE) for _ in range(200)}
+    assert picks == {'RIGHT'}
+
+
+def test_masking_off_leaves_the_illegal_choice_in_place(monkeypatch):
+    """The unmasked arm must still be able to pick a wall, otherwise the two
+    arms would not differ and the comparison would measure nothing.
+    """
+    monkeypatch.setattr(callbacks, 'MASK_ILLEGAL', False)
+    q = [9.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    agent = _agent_with_fixed_q(q, train=False)
+    assert {callbacks.act(agent, STATE) for _ in range(20)} == {'UP'}

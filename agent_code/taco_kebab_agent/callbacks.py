@@ -13,7 +13,7 @@ import numpy as np
 from .model import ACTIONS, Model
 from .model_b import ModelB
 
-from .features import state_to_features
+from .features import FEATURE_GROUPS, FEATURE_NAMES, state_to_features
 
 #: Which approximator to build. Defaults to the forest because the tournament
 #: runs with no environment variables, so the default is what gets submitted.
@@ -62,6 +62,29 @@ MODEL_PATH = TACO_MODEL_PATH or ('model_b.joblib' if MODEL_KIND == 'b' else 'mod
 #: it's used, not silently at import time. Unset by default, which preserves
 #: today's unseeded behaviour.
 AGENT_SEED = os.environ.get('TACO_SEED')
+
+#: Remove actions the board forbids from the greedy choice. Off by default:
+#: legality is already in phi (the free_* block and bomb_available), so the
+#: unmasked agent is the one that still has to learn it, which is the design
+#: rule this project follows everywhere else. Set TACO_MASK=1 for the masked
+#: arm. Exploration is deliberately left unmasked, so the two arms collect
+#: the same kind of experience and differ only in how they exploit it.
+MASK_ILLEGAL = os.environ.get('TACO_MASK') == '1'
+
+_BOMB_AVAILABLE = FEATURE_NAMES.index('bomb_available')
+
+
+def legal_mask(features):
+    """Executable actions, read off phi rather than re-derived from the board.
+
+    The first four actions are the moves (bfs.py asserts this at import), so
+    the free_* block lines up with them index for index. WAIT is always legal.
+    """
+    mask = np.ones(len(ACTIONS), dtype=bool)
+    free = FEATURE_GROUPS['free']
+    mask[:4] = np.asarray(features)[free:free + 4] > 0.5
+    mask[ACTIONS.index('BOMB')] = features[_BOMB_AVAILABLE] > 0.5
+    return mask
 
 
 def setup(self):
@@ -131,6 +154,11 @@ def act(self, game_state: dict) -> str:
         action = self.rng.choice(ACTIONS)
         self.logger.debug(f"Exploring: chose random action {action}.")
         return action
+
+    if MASK_ILLEGAL:
+        mask = legal_mask(features)
+        if mask.any():
+            q_values = np.where(mask, q_values, -np.inf)
 
     # np.argmax always resolves a tie to its first index, which is UP -- and
     # every action is tied at 0.0 before the model has seen any data, so an
