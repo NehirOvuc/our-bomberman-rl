@@ -97,7 +97,7 @@ except ValueError as exc:
 #: goes on, and so would the cost of fitting six forests, without bound, for
 #: the rest of the run. MAX_SAMPLES_PER_ACTION keeps every refit's cost
 #: roughly constant instead. A starting value -- see benchmark_model_b.py.
-MAX_SAMPLES_PER_ACTION = 5000
+MAX_SAMPLES_PER_ACTION = int(os.environ.get('TACO_MAX_SAMPLES_PER_ACTION', '5000'))
 
 
 class ModelB:
