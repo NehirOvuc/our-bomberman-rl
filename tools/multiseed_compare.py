@@ -67,22 +67,36 @@ EXPERIMENTS = {
         'baseline': {'TACO_NSTEP': '1'},
         'floor1': {'TACO_NSTEP': '1', 'TACO_MIN_SAMPLES_TO_FIT': '1'},
     },
+    'ridge-lambda': {
+        'lambda-0.1': {'TACO_MODEL': 'a', 'TACO_RIDGE_LAMBDA': '0.1'},
+        'lambda-1':   {'TACO_MODEL': 'a', 'TACO_RIDGE_LAMBDA': '1'},
+        'lambda-10':  {'TACO_MODEL': 'a', 'TACO_RIDGE_LAMBDA': '10'},
+        'lambda-100': {'TACO_MODEL': 'a', 'TACO_RIDGE_LAMBDA': '100'},
+    },
+    'ridge-lambda-n5': {
+        'lambda-0.1': {'TACO_MODEL': 'a', 'TACO_RIDGE_LAMBDA': '0.1', 'TACO_NSTEP': '5'},
+        'lambda-1':   {'TACO_MODEL': 'a', 'TACO_RIDGE_LAMBDA': '1',   'TACO_NSTEP': '5'},
+        'lambda-10':  {'TACO_MODEL': 'a', 'TACO_RIDGE_LAMBDA': '10',  'TACO_NSTEP': '5'},
+        'lambda-100': {'TACO_MODEL': 'a', 'TACO_RIDGE_LAMBDA': '100', 'TACO_NSTEP': '5'},
+    },
 }
 
 
-def checkpoint_name(experiment, arm_name, seed):
+def checkpoint_name(experiment, arm_name, seed, model_kind):
     """The TACO_MODEL_PATH filename shared by training and evaluation for one
     (experiment, arm, seed) triple.
 
-    Both sides have to agree on this exact string: training writes it to
-    disk, and evaluation reads it back via the same env var name. It is a
-    bare filename (no directory component), which is the constraint
-    callbacks.py enforces on TACO_MODEL_PATH -- see its comment on why
-    (SequentialAgentBackend chdirs into the agent's own directory before
-    every callback, so a bare name is already relative to
-    agent_code/taco_kebab_agent/, regardless of this script's own cwd).
+    ...(docstring existente sin cambios hasta aquí)...
+
+    model_kind picks the extension: Model.save() (model.py) writes via
+    np.savez, which silently appends its own '.npz' suffix to any filename
+    that doesn't already end in it, so a Model-A checkpoint asked for by a
+    '.joblib' name would land on disk one suffix later than every other
+    place that looks it up by that exact name. ModelB.save() (model_b.py)
+    writes '.joblib' directly.
     """
-    return f'{experiment}_{arm_name}_seed{seed}.joblib'
+    extension = 'npz' if model_kind == 'a' else 'joblib'
+    return f'{experiment}_{arm_name}_seed{seed}.{extension}'
 
 
 def train_checkpoint(experiment, arm_name, arm_overrides, seed, train_rounds):
@@ -100,12 +114,9 @@ def train_checkpoint(experiment, arm_name, arm_overrides, seed, train_rounds):
     """
     env = os.environ.copy()
     env['TACO_MODEL'] = 'b'
-    # Every checkpoint in this comparison starts from scratch: without this,
-    # a stale model_b.joblib -- or a previous arm's checkpoint accidentally
-    # sharing a name -- would get refit on top of already-learned weights
-    # instead of the fresh start the comparison needs.
     env['TACO_FRESH'] = '1'
-    env['TACO_MODEL_PATH'] = checkpoint_name(experiment, arm_name, seed)
+    model_kind = arm_overrides.get('TACO_MODEL', 'b')
+    env['TACO_MODEL_PATH'] = checkpoint_name(experiment, arm_name, seed, model_kind)
     env.update(arm_overrides)
 
     command = [
@@ -125,7 +136,7 @@ def train_checkpoint(experiment, arm_name, arm_overrides, seed, train_rounds):
             f'{result.stderr[-2000:]}')
 
 
-def evaluate_checkpoint(experiment, arm_name, seed, eval_lineup, eval_rounds, smoke,
+def evaluate_checkpoint(experiment, arm_name, arm_overrides, seed, eval_lineup, eval_rounds, smoke,
                         keep_checkpoints=False):
     """Level 2: evaluate one trained checkpoint via tools/evaluate.py's own
     evaluate() / report() / append_log(), called directly rather than through
@@ -146,8 +157,11 @@ def evaluate_checkpoint(experiment, arm_name, seed, eval_lineup, eval_rounds, sm
     previous_taco_env = {key: os.environ[key]
                          for key in os.environ if key.startswith('TACO_')}
 
-    os.environ['TACO_MODEL'] = 'b'
-    os.environ['TACO_MODEL_PATH'] = checkpoint_name(experiment, arm_name, seed)
+   # Must match train_checkpoint's derivation exactly, or evaluation loads
+    # the wrong class against the wrong file for any arm that isn't Model B.
+    model_kind = arm_overrides.get('TACO_MODEL', 'b')
+    os.environ['TACO_MODEL'] = model_kind
+    os.environ['TACO_MODEL_PATH'] = checkpoint_name(experiment, arm_name, seed, model_kind)
     # Deliberately no TACO_FRESH here: this evaluates the checkpoint that
     # training just produced, it must not be replaced with a fresh model.
 
@@ -173,7 +187,7 @@ def evaluate_checkpoint(experiment, arm_name, seed, eval_lineup, eval_rounds, sm
                 del os.environ[key]
         if not keep_checkpoints:
             checkpoint_path = ROOT / 'agent_code' / 'taco_kebab_agent' / \
-                checkpoint_name(experiment, arm_name, seed)
+                checkpoint_name(experiment, arm_name, seed, model_kind)
             checkpoint_path.unlink(missing_ok=True)
 
 
@@ -264,7 +278,7 @@ def main():
 
             print(f'evaluating ({args.eval_rounds} rounds x '
                   f'{len(evaluate.EVAL_SEEDS)} eval seeds)...')
-            summary = evaluate_checkpoint(args.experiment, arm_name, seed,
+            summary = evaluate_checkpoint(args.experiment, arm_name, arm_overrides, seed,
                                           args.eval_lineup, args.eval_rounds,
                                           args.smoke,
                                           keep_checkpoints=args.keep_checkpoints)
