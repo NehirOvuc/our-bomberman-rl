@@ -11,7 +11,7 @@ import random
 import numpy as np
 
 from .model import ACTIONS, Model
-from .model_b import ModelB
+from .model_b import ModelB, MAX_DEPTH as MODEL_B_MAX_DEPTH
 
 from .features import state_to_features
 
@@ -29,6 +29,18 @@ MODEL_KIND = os.environ.get('TACO_MODEL', 'b').lower()
 #: while the drop step itself pays nothing -- at n_step=1 the BOMB regression
 #: never sees its own consequence directly. Set TACO_NSTEP=5 to span the fuse.
 N_STEP = int(os.environ.get('TACO_NSTEP', '1'))
+
+
+#: Ridge regularisation strength for Model A; ModelB ignores it. Set
+#: TACO_RIDGE_LAMBDA to sweep it without editing this file, mirroring
+#: TACO_NSTEP's pattern above.
+RIDGE_LAMBDA = float(os.environ.get('TACO_RIDGE_LAMBDA', '1.0'))
+
+#: Forest depth cap for Model B; Model A ignores it. Set TACO_MAX_DEPTH to
+#: sweep it without editing model_b.py -- ModelB.__init__ already accepts
+#: max_depth, it was just never wired to an environment override, unlike
+#: TACO_MIN_SAMPLES_TO_FIT which model_b.py reads directly.
+MAX_DEPTH = int(os.environ.get('TACO_MAX_DEPTH', str(MODEL_B_MAX_DEPTH)))
 
 #: Relative path per interface_contract.md section 6 -- absolute paths break
 #: the Docker submission test. Bare filename because SequentialAgentBackend
@@ -77,8 +89,8 @@ def setup(self):
     #
     # Model B is the same pipeline with the linear Q swapped for a forest.
     # Nothing else differs -- same features, same rewards, same epsilon.
-    self.model = (ModelB(n_step=N_STEP) if MODEL_KIND == 'b'
-                  else Model(n_step=N_STEP))
+    self.model = (ModelB(n_step=N_STEP, max_depth=MAX_DEPTH) if MODEL_KIND == 'b'
+              else Model(n_step=N_STEP, ridge_lambda=RIDGE_LAMBDA))
     self.logger.info(f"Using model {MODEL_KIND.upper()} with weights at "
                      f"{MODEL_PATH}, n_step={N_STEP}.")
     self.epsilon = 0.2  # exploration rate; tuned later via PLAN.md's hyperparameter grid search
