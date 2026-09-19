@@ -79,6 +79,11 @@ EXPERIMENTS = {
         'lambda-10':  {'TACO_MODEL': 'a', 'TACO_RIDGE_LAMBDA': '10',  'TACO_NSTEP': '5'},
         'lambda-100': {'TACO_MODEL': 'a', 'TACO_RIDGE_LAMBDA': '100', 'TACO_NSTEP': '5'},
     },
+    'forest-max-depth': {
+    'depth-8':  {'TACO_MODEL': 'b', 'TACO_MAX_DEPTH': '8'},
+    'depth-12': {'TACO_MODEL': 'b', 'TACO_MAX_DEPTH': '12'},
+    'depth-16': {'TACO_MODEL': 'b', 'TACO_MAX_DEPTH': '16'},
+    },
 }
 
 
