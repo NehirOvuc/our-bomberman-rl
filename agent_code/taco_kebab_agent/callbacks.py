@@ -30,6 +30,12 @@ MODEL_KIND = os.environ.get('TACO_MODEL', 'b').lower()
 #: never sees its own consequence directly. Set TACO_NSTEP=5 to span the fuse.
 N_STEP = int(os.environ.get('TACO_NSTEP', '1'))
 
+
+#: Ridge regularisation strength for Model A; ModelB ignores it. Set
+#: TACO_RIDGE_LAMBDA to sweep it without editing this file, mirroring
+#: TACO_NSTEP's pattern above.
+RIDGE_LAMBDA = float(os.environ.get('TACO_RIDGE_LAMBDA', '1.0'))
+
 #: Relative path per interface_contract.md section 6 -- absolute paths break
 #: the Docker submission test. Bare filename because SequentialAgentBackend
 #: (agents.py) chdirs into this agent's own directory before every callback,
@@ -78,7 +84,7 @@ def setup(self):
     # Model B is the same pipeline with the linear Q swapped for a forest.
     # Nothing else differs -- same features, same rewards, same epsilon.
     self.model = (ModelB(n_step=N_STEP) if MODEL_KIND == 'b'
-                  else Model(n_step=N_STEP))
+              else Model(n_step=N_STEP, ridge_lambda=RIDGE_LAMBDA))
     self.logger.info(f"Using model {MODEL_KIND.upper()} with weights at "
                      f"{MODEL_PATH}, n_step={N_STEP}.")
     self.epsilon = 0.2  # exploration rate; tuned later via PLAN.md's hyperparameter grid search
